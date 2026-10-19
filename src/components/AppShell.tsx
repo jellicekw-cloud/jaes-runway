@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, todayKey, weekStart } from '../lib/dates'
-import { EMPTY_MONEY, dueBeforePayday, loadMoney, nextPayday, overdue, type MoneyData } from '../lib/money'
+import { EMPTY_MONEY, dueBeforePayday, loadMoney, logSubscriptionCharges, nextPayday, overdue, type MoneyData } from '../lib/money'
 import JournalSearch from './JournalSearch'
 import WeekView from './WeekView'
 import BillsView from './BillsView'
+import MoneyView from './MoneyView'
+import LogPurchase from './LogPurchase'
 
-type Tab = 'week' | 'bills'
+type Tab = 'week' | 'bills' | 'money'
+const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money' }
 
 /** Header, tabs and the money data every screen shares. */
 export default function AppShell({ email, userId }: { email: string; userId: string }) {
@@ -16,18 +19,34 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [moneyData, setMoneyData] = useState<MoneyData>(EMPTY_MONEY)
   const [moneyError, setMoneyError] = useState('')
   const [moneyLoaded, setMoneyLoaded] = useState(false)
+  const [logOpen, setLogOpen] = useState(false)
+  const [toast, setToast] = useState('')
+  const toastTimer = useRef<number | undefined>(undefined)
+  const subsLogged = useRef(false)
 
   const reloadMoney = useCallback(async () => {
     try {
-      setMoneyData(await loadMoney())
+      let data = await loadMoney(today)
+      // Once per visit: put any auto-pay charges that have happened into the spending log
+      if (!subsLogged.current) {
+        subsLogged.current = true
+        if (await logSubscriptionCharges(data, today)) data = await loadMoney(today)
+      }
+      setMoneyData(data)
       setMoneyError('')
     } catch (e) {
       setMoneyError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
     }
     setMoneyLoaded(true)
-  }, [])
+  }, [today])
 
   useEffect(() => { void reloadMoney() }, [reloadMoney])
+
+  function showToast(message: string) {
+    setToast(message)
+    window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(''), 2600)
+  }
 
   const np = nextPayday(moneyData, today)
   const due = dueBeforePayday(moneyData, today)
@@ -50,10 +69,10 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         <div className="text-2xl font-bold">Jae's Runway</div>
 
         <div role="tablist" aria-label="Screens" className="inline-flex gap-1 rounded-xl bg-header-2 p-1">
-          {(['week', 'bills'] as Tab[]).map((t) => (
+          {(['week', 'bills', 'money'] as Tab[]).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
               className={`h-9 px-4 rounded-lg border-0 font-bold cursor-pointer ${tab === t ? 'bg-accent-hi text-white' : 'bg-transparent text-header-muted hover:text-white'}`}>
-              {t === 'week' ? 'Week' : 'Bills'}
+              {TAB_LABEL[t]}
             </button>
           ))}
         </div>
@@ -98,6 +117,11 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         </div>
 
         <div className="flex-1" />
+        <button type="button" onClick={() => setLogOpen(true)} aria-label="Log a purchase"
+          className="h-11 pl-3 pr-4 inline-flex items-center gap-1.5 rounded-xl border-0 bg-accent-hi text-white font-bold cursor-pointer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          Log
+        </button>
         <JournalSearch onPick={openDay} />
         <button type="button" onClick={() => supabase.auth.signOut()}
           className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-header-muted text-sm font-bold cursor-pointer hover:bg-header-2">
@@ -112,11 +136,20 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         </div>
       )}
 
-      {tab === 'week' ? (
+      {tab === 'week' && (
         <WeekView email={email} userId={userId} today={today} selected={selected} onSelect={setSelected}
           money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney} />
-      ) : (
-        <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />
+      )}
+      {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
+      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => setLogOpen(true)} />}
+
+      <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
+
+      {toast && (
+        <div role="status" className="fixed left-1/2 -translate-x-1/2 bottom-6 z-30 rounded-full bg-header text-white px-5 py-2.5 font-bold shadow-2xl"
+          style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+          {toast}
+        </div>
       )}
     </div>
   )

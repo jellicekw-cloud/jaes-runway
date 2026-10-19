@@ -20,11 +20,13 @@ Open the site in Safari (iPhone) or Chrome (Android) → Share / menu → **Add 
 src/
   App.tsx              login gate + "missing keys" screen
   components/
-    AppShell.tsx       header, Week | Bills tabs, payday / due / overdue pills
+    AppShell.tsx       header, Week | Bills | Money tabs, + Log, payday / due / overdue pills
     Login.tsx          email + password sign-in
     WeekView.tsx       week of paydays, bills, subscriptions, to-dos, journal
     DayBills.tsx       the selected day's payday, bills due (Mark paid) and auto-pay
     BillsView.tsx      Bills tab: overview, cards, Afterpay, subscriptions, other bills
+    MoneyView.tsx      Money tab: checking balances, savings challenge, paycheck, spending
+    LogPurchase.tsx    the + Log window (SoFi heads-up, Afterpay split)
     JournalEditor.tsx  write a day: mood, tags, timestamps, emojis, autosave
     JournalSearch.tsx  header search across journal text and tags
   lib/
@@ -43,7 +45,7 @@ supabase/
 1. ✅ Starter: login + week view reading real data
 2. ✅ Journal: write, mood, tags, timestamps, autosave, search
 3. ✅ Bills: cards, mark paid with actual amount, Afterpay orders, subscriptions, other monthly bills
-4. Money: balances, paycheck split, savings challenge, purchase log (+ button)
+4. ✅ Money: balances (estimated since last update), paycheck split, savings challenge, purchase log (+ Log), auto-logged subscriptions
 5. Phone layout: Home (balances, 3 days, to-dos, journal, travel), bottom tabs
 6. To-dos and calendar events
 7. Trips: itinerary, standby / award certificate flights, travelers, packing, passports

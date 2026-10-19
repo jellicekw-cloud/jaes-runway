@@ -80,7 +80,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {m.orders.map((o) => <OrderCard key={o.id} order={o} m={m} today={today} run={run} />)}
         </div>
-        <AddOrder payFrom={payFrom} today={today} run={run} />
+        <AddOrder payFrom={payFrom} today={today} run={run} m={m} />
       </Section>
 
       <Section title="Subscriptions" right={<span className="font-bold tnum">{money(subMonthly)}/mo · {money(subMonthly * 12)}/yr</span>}>
@@ -248,7 +248,7 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
       {upcoming && (
         <div className={`flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 text-sm ${upcoming.status === 'paid' ? 'bg-pay-soft text-pay-ink' : upcoming.status === 'overdue' ? 'bg-bad/10 text-bad' : 'bg-surface-2'}`}>
           <b>{upcoming.status === 'paid' ? `Paid ${money(upcoming.payment?.amount)} for ${shortDate(upcoming.date)}` : `Due ${shortDate(upcoming.date)}`}</b>
-          {upcoming.status !== 'paid' && <QuickPay o={upcoming} m={m} run={run} />}
+          {upcoming.status !== 'paid' && <QuickPay key={`${upcoming.key}:${upcoming.amount ?? ''}`} o={upcoming} m={m} run={run} />}
           {upcoming.status === 'paid' && (
             <button type="button" onClick={() => void run(() => undoPayment(m, upcoming))}
               className="h-8 px-3 rounded-lg border border-line bg-surface text-fg font-bold cursor-pointer">Undo</button>
@@ -357,7 +357,7 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
   )
 }
 
-function AddOrder({ payFrom, today, run }: { payFrom: { value: string; label: string }[]; today: string; run: Run }) {
+function AddOrder({ payFrom, today, run, m }: { payFrom: { value: string; label: string }[]; today: string; run: Run; m: MoneyData }) {
   const nfcu = payFrom.find((p) => p.label === 'NFCU')?.value ?? ''
   const [name, setName] = useState('')
   const [total, setTotal] = useState('')
@@ -373,7 +373,7 @@ function AddOrder({ payFrom, today, run }: { payFrom: { value: string; label: st
     e.preventDefault()
     if (!t || t <= 0) return
     void run(async () => {
-      await addAfterpayOrder({ name: name.trim() || 'Afterpay order', total: t, order_date: date, ...splitSource(src) })
+      await addAfterpayOrder(m, { name: name.trim() || 'Afterpay order', total: t, order_date: date, ...splitSource(src) })
       setName(''); setTotal(''); setDate(today)
     })
   }

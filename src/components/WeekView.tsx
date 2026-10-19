@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, weekStart } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
-import { isPayday, obligationsOn, paycheckTotal, type MoneyData, type Obligation } from '../lib/money'
+import { isPayday, obligationsOn, paycheckTotal, savingsOn, type MoneyData, type Obligation } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag, type Todo } from '../lib/types'
 import JournalEditor from './JournalEditor'
 import DayBills from './DayBills'
@@ -84,6 +84,7 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
           const d = dateOf(k)
           const entry = journal.find((j) => j.entry_date === k)
           const pay = isPayday(m, k)
+          const save = savingsOn(m, k)
           const due = obligationsOn(m, k, today)
           const dayTodos = todos.filter((t) => t.due_date === k || (k === today && !t.done_at && t.due_date !== null && t.due_date < today))
           const isToday = k === today
@@ -102,6 +103,14 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
               {pay && (
                 <span className="self-start rounded-full bg-pay text-white text-xs font-bold px-2.5 py-0.5">
                   $ Payday{payTotal ? ` · ${money(payTotal)}` : ''}
+                </span>
+              )}
+
+              {save && (
+                <span className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold min-w-0 ${save.deposit ? 'border-pay bg-pay-soft text-pay-ink' : 'border-pay bg-surface-2'}`}>
+                  <span className="size-2.5 rounded-full shrink-0 bg-pay" />
+                  <span className="truncate">Savings {save.no}/{m.challenge?.deposit_count}</span>
+                  <span className="ml-auto tnum">{save.deposit ? '✓' : money(save.amount)}</span>
                 </span>
               )}
 

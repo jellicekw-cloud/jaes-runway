@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { daysBetween, money, shortDate } from '../lib/dates'
-import { isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, undoPayment, type MoneyData, type Obligation } from '../lib/money'
+import {
+  isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, saveDeposit, savingsOn, undoDeposit, undoPayment, type MoneyData, type Obligation,
+} from '../lib/money'
 
 interface Props {
   date: string
@@ -15,8 +17,9 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
   const bills = items.filter((o) => o.kind !== 'sub')
   const subs = items.filter((o) => o.kind === 'sub')
   const pay = isPayday(m, date)
+  const save = savingsOn(m, date)
 
-  if (!pay && items.length === 0) return null
+  if (!pay && !save && items.length === 0) return null
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -31,6 +34,8 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
           </span>
         </div>
       )}
+
+      {save && <SavingsRow date={date} today={today} money={m} reloadMoney={reloadMoney} />}
 
       {bills.length > 0 && <span className="text-xs font-bold tracking-widest uppercase text-muted">Bills due</span>}
       {bills.map((o) => <BillRow key={o.key} o={o} today={today} money={m} reloadMoney={reloadMoney} />)}
@@ -52,6 +57,7 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
 
 function BillRow({ o, today, money: m, reloadMoney }: { o: Obligation; today: string; money: MoneyData; reloadMoney: () => Promise<void> }) {
   const [amount, setAmount] = useState(o.amount !== null ? o.amount.toFixed(2) : '')
+  const [fromId, setFromId] = useState(o.fromAccountId ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const inputId = `pay-${o.key.replace(/[^a-z0-9]/gi, '-')}`
@@ -60,7 +66,7 @@ function BillRow({ o, today, money: m, reloadMoney }: { o: Obligation; today: st
     const value = parseMoney(amount)
     if (value === null || value <= 0) { setError('Enter the amount you paid.'); return }
     setBusy(true); setError('')
-    try { await markPaid(m, o, value); await reloadMoney() } catch (e) { setError(e instanceof Error ? e.message : 'Couldn\'t save') }
+    try { await markPaid(m, o, value, fromId || null); await reloadMoney() } catch (e) { setError(e instanceof Error ? e.message : 'Couldn\'t save') }
     setBusy(false)
   }
 
@@ -106,12 +112,54 @@ function BillRow({ o, today, money: m, reloadMoney }: { o: Obligation; today: st
             <input id={inputId} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Paid"
               className="w-24 border-0 bg-transparent text-fg tnum focus:outline-none" />
           </label>
+          {o.kind !== 'afterpay' && (
+            <label className="inline-flex items-center gap-1.5 text-sm text-muted" htmlFor={`${inputId}-from`}>
+              from
+              <select id={`${inputId}-from`} value={fromId} onChange={(e) => setFromId(e.target.value)}
+                className="h-10 rounded-lg border border-line bg-surface px-2 text-fg focus:outline-2 focus:outline-accent-hi">
+                {m.accounts.filter((a) => a.kind === 'checking').map((a) => <option key={a.id} value={a.id}>{a.institution ?? a.name}</option>)}
+                <option value="">Somewhere else</option>
+              </select>
+            </label>
+          )}
           <button type="submit" disabled={busy}
             className="h-10 px-4 rounded-lg border-0 bg-accent text-accent-ink font-bold cursor-pointer disabled:opacity-60">
             {busy ? 'Saving…' : 'Mark paid'}
           </button>
         </form>
       )}
+      {error && <span role="alert" className="text-sm font-bold text-bad">{error}</span>}
+    </div>
+  )
+}
+
+function SavingsRow({ date, today, money: m, reloadMoney }: { date: string; today: string; money: MoneyData; reloadMoney: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const step = savingsOn(m, date)
+  if (!step || !m.challenge) return null
+  const done = Boolean(step.deposit)
+
+  async function toggle() {
+    if (!step) return
+    setBusy(true); setError('')
+    try { await (done ? undoDeposit(step) : saveDeposit(m, step, today)); await reloadMoney() } catch (e) { setError(e instanceof Error ? e.message : 'Couldn\'t save') }
+    setBusy(false)
+  }
+
+  return (
+    <div className={`flex flex-col gap-2 rounded-xl border px-3 py-2.5 ${done ? 'border-pay bg-pay-soft' : 'border-line bg-surface-2'}`}>
+      <div className="flex items-center gap-2.5">
+        <span className="size-3 rounded-full shrink-0 bg-pay" />
+        <span className="flex-1 min-w-0">
+          <b className="block">Savings challenge · {step.no} of {m.challenge.deposit_count}</b>
+          <span className="block text-sm text-muted">{done ? `Saved ${money(step.amount)} to your SoFi Vault` : `Move ${money(step.amount)} from SoFi to your Vault`}</span>
+        </span>
+        <button type="button" onClick={() => void toggle()} disabled={busy}
+          className={`h-10 px-4 rounded-lg font-bold cursor-pointer disabled:opacity-60 ${done ? 'border border-line bg-surface text-fg' : 'border-0 bg-pay text-white'}`}>
+          {done ? 'Undo' : 'Saved it'}
+        </button>
+      </div>
       {error && <span role="alert" className="text-sm font-bold text-bad">{error}</span>}
     </div>
   )
