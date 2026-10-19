@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/* Jae's Runway palette: deep violet ground, bright violet accent, green for money in */
+:root {
+  --bg: #EFE7FB;
+  --surface: #FFFFFF;
+  --surface-2: #F8F4FE;
+  --line: #DCCDF3;
+  --fg: #1A0B33;
+  --muted: #5E4A85;
+  --accent: #6D28D9;
+  --accent-hi: #8B3DFF;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #EADCFF;
+  --header: #1C0838;
+  --header-2: #3A1670;
+  --header-muted: #D4BEFF;
+  --pay-soft: #C9F2D7;
+  --pay-ink: #0B5A2A;
+  --pay: #16A34A;
+  --warn: #C2410C;
+  --warn-soft: #FFE2CC;
+  --bad: #DC2626;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0E0619;
+    --surface: #1A0F2E;
+    --surface-2: #22143D;
+    --line: #3D2468;
+    --fg: #F3ECFF;
+    --muted: #B9A2E6;
+    --accent: #A970FF;
+    --accent-hi: #C29BFF;
+    --accent-ink: #160A2B;
+    --accent-soft: #34195E;
+    --header: #150629;
+    --header-2: #33125F;
+    --header-muted: #CDB4FF;
+    --pay-soft: #0F3B22;
+    --pay-ink: #7CF0A8;
+    --pay: #34D06F;
+    --warn: #FF9A52;
+    --warn-soft: #3F220D;
+    --bad: #FF6B6B;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-hi: var(--accent-hi);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-header: var(--header);
+  --color-header-2: var(--header-2);
+  --color-header-muted: var(--header-muted);
+  --color-pay: var(--pay);
+  --color-pay-soft: var(--pay-soft);
+  --color-pay-ink: var(--pay-ink);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --font-sans: "Arial Nova Cond", "Arial Nova Condensed", "Archivo Narrow", "Arial Narrow", Arial, sans-serif;
+}
+
+html, body, #root { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
+.tnum { font-variant-numeric: tabular-nums; }
+.safe-x {
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
