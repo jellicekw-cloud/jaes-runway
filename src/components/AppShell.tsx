@@ -6,7 +6,9 @@ import JournalSearch from './JournalSearch'
 import WeekView from './WeekView'
 import BillsView from './BillsView'
 import MoneyView from './MoneyView'
-import LogPurchase from './LogPurchase'
+import LogPurchase, { type AddMode } from './LogPurchase'
+import { AnytimeTodos, DayPlans } from './Plans'
+import { EMPTY_PLANS, loadPlans, type Plans } from '../lib/plans'
 import PhoneShell from './PhoneShell'
 import { useIsPhone } from '../lib/useIsPhone'
 
@@ -23,6 +25,9 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [moneyError, setMoneyError] = useState('')
   const [moneyLoaded, setMoneyLoaded] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
+  const [addMode, setAddMode] = useState<AddMode>('buy')
+  const [plans, setPlans] = useState<Plans>(EMPTY_PLANS)
+  const [plansError, setPlansError] = useState('')
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
   const subsLogged = useRef(false)
@@ -44,6 +49,17 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   }, [today])
 
   useEffect(() => { void reloadMoney() }, [reloadMoney])
+
+  const reloadPlans = useCallback(async () => {
+    try { setPlans(await loadPlans(today)); setPlansError('') } catch (e) {
+      setPlansError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
+    }
+  }, [today])
+
+  useEffect(() => { void reloadPlans() }, [reloadPlans])
+
+  const openAdd = (mode: AddMode = 'buy') => { setAddMode(mode); setLogOpen(true) }
+  const dayPlans = (date: string, showAdd = true) => <DayPlans date={date} today={today} plans={plans} reload={reloadPlans} showAdd={showAdd} />
 
   function showToast(message: string) {
     setToast(message)
@@ -67,7 +83,14 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
   const shared = (
     <>
-      <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
+      <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} mode={addMode} onMode={setAddMode} reloadPlans={reloadPlans}
+        today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
+      {plansError && (
+        <div role="alert" className="fixed left-3 right-3 top-3 z-40 rounded-xl bg-bad text-white px-4 py-2.5 text-sm font-bold">
+          Couldn't load to-dos and events: {plansError}{' '}
+          <button type="button" onClick={() => void reloadPlans()} className="underline bg-transparent border-0 text-white font-bold">Try again</button>
+        </div>
+      )}
       {toast && (
         <div role="status" className="fixed left-1/2 -translate-x-1/2 z-30 rounded-full bg-header text-white px-5 py-2.5 font-bold shadow-2xl whitespace-nowrap"
           style={{ bottom: isPhone ? 'calc(104px + env(safe-area-inset-bottom, 0px))' : '24px' }}>
@@ -81,7 +104,9 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     return (
       <>
         <PhoneShell userId={userId} today={today} money={moneyData} moneyLoaded={moneyLoaded} moneyError={moneyError}
-          reloadMoney={reloadMoney} onLog={() => setLogOpen(true)} />
+          reloadMoney={reloadMoney} onLog={() => openAdd('buy')}
+          homeExtra={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />}
+          plans={plans} dayExtra={dayPlans} />
         {shared}
       </>
     )
@@ -142,10 +167,10 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         </div>
 
         <div className="flex-1" />
-        <button type="button" onClick={() => setLogOpen(true)} aria-label="Log a purchase"
+        <button type="button" onClick={() => openAdd('buy')} aria-label="Add a purchase, to-do or event"
           className="h-11 pl-3 pr-4 inline-flex items-center gap-1.5 rounded-xl border-0 bg-accent-hi text-white font-bold cursor-pointer">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-          Log
+          Add
         </button>
         <JournalSearch onPick={openDay} />
         <button type="button" onClick={() => supabase.auth.signOut()}
@@ -163,10 +188,11 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
       {tab === 'week' && (
         <WeekView email={email} userId={userId} today={today} selected={selected} onSelect={setSelected}
-          money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney} />
+          money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
+          plans={plans} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
       )}
       {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
-      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => setLogOpen(true)} />}
+      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} />}
 
       {shared}
     </div>

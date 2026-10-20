@@ -5,10 +5,16 @@ import {
   type MoneyData, type PayWith,
 } from '../lib/money'
 import { CATEGORIES } from '../lib/types'
+import { REPEAT_LABEL, addEvent, addTodo, type Repeat } from '../lib/plans'
+
+export type AddMode = 'buy' | 'todo' | 'event'
 
 interface Props {
   open: boolean
   onClose: () => void
+  mode: AddMode
+  onMode: (m: AddMode) => void
+  reloadPlans: () => Promise<void>
   today: string
   money: MoneyData
   reloadMoney: () => Promise<void>
@@ -16,7 +22,7 @@ interface Props {
 }
 
 /** The + button's window: log a purchase from anywhere in the app. */
-export default function LogPurchase({ open, onClose, today, money: m, reloadMoney, onLogged }: Props) {
+export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, today, money: m, reloadMoney, onLogged }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const amountRef = useRef<HTMLInputElement>(null)
   const [amount, setAmount] = useState('')
@@ -26,6 +32,14 @@ export default function LogPurchase({ open, onClose, today, money: m, reloadMone
   const [withKey, setWithKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // to-do / event fields
+  const textRef = useRef<HTMLInputElement>(null)
+  const [text, setText] = useState('')
+  const [when, setWhen] = useState<'none' | 'today' | 'tomorrow' | 'pick'>('none')
+  const [pick, setPick] = useState(today)
+  const [repeat, setRepeat] = useState<Repeat>('none')
+  const [time, setTime] = useState('')
+  const [place, setPlace] = useState('')
 
   const nfcu = billsAccountId(m)
   const options: { key: string; label: string; with: PayWith }[] = [
@@ -39,9 +53,10 @@ export default function LogPurchase({ open, onClose, today, money: m, reloadMone
     if (!el) return
     if (open && !el.open) {
       setAmount(''); setWhat(''); setCategory('Other'); setDate(today); setError('')
+      setText(''); setWhen(mode === 'event' ? 'today' : 'none'); setPick(today); setRepeat('none'); setTime(''); setPlace('')
       setWithKey(nfcu ? `a:${nfcu}` : options[0]?.key ?? '')
       el.showModal()
-      requestAnimationFrame(() => amountRef.current?.focus())
+      requestAnimationFrame(() => (mode === 'buy' ? amountRef.current : textRef.current)?.focus())
     }
     if (!open && el.open) el.close()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -50,6 +65,26 @@ export default function LogPurchase({ open, onClose, today, money: m, reloadMone
   const amt = parseMoney(amount)
   const chosen = options.find((o) => o.key === withKey)
   const hint = buildHint(m, today, chosen?.with, amt, date)
+
+  const dueDate = when === 'today' ? today : when === 'tomorrow' ? addDays(today, 1) : when === 'pick' ? pick : null
+
+  async function submitPlan(e: FormEvent) {
+    e.preventDefault()
+    const v = text.trim()
+    if (!v) { setError(mode === 'event' ? 'Name the event.' : 'Type the to-do.'); textRef.current?.focus(); return }
+    if (mode === 'event' && !dueDate) { setError('Pick a day for the event.'); return }
+    setBusy(true); setError('')
+    try {
+      if (mode === 'todo') await addTodo({ text: v, due_date: dueDate, repeat })
+      else await addEvent({ title: v, event_date: dueDate!, start_time: time || null, location: place.trim() || null })
+      await reloadPlans()
+      onLogged(`Added${dueDate ? ` for ${dueDate === today ? 'today' : shortDate(dueDate)}` : ''} · ${v}`)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Couldn\'t save')
+    }
+    setBusy(false)
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -73,15 +108,77 @@ export default function LogPurchase({ open, onClose, today, money: m, reloadMone
   return (
     <dialog ref={dialog} onClose={onClose} aria-labelledby="log-title"
       className="m-auto w-[min(520px,calc(100vw-24px))] max-h-[calc(100dvh-24px)] rounded-3xl border border-line bg-surface p-0 text-fg backdrop:bg-black/50">
-      <form onSubmit={submit} className="flex flex-col gap-4 p-5">
+      <div className="flex flex-col gap-4 p-5">
         <div className="flex items-center justify-between">
-          <h2 id="log-title" className="m-0 text-2xl font-bold">Log a purchase</h2>
+          <h2 id="log-title" className="m-0 text-2xl font-bold">Add</h2>
           <button type="button" onClick={onClose} aria-label="Close"
             className="size-10 rounded-full border border-line bg-transparent text-fg grid place-items-center cursor-pointer">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
+        <div role="tablist" aria-label="What to add" className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1">
+          {([['buy', 'Purchase'], ['todo', 'To-do'], ['event', 'Event']] as [AddMode, string][]).map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={mode === k}
+              onClick={() => { onMode(k); setError(''); if (k === 'event' && when === 'none') setWhen('today'); requestAnimationFrame(() => (k === 'buy' ? amountRef.current : textRef.current)?.focus()) }}
+              className={`h-10 rounded-lg border-0 font-bold cursor-pointer ${mode === k ? 'bg-accent text-accent-ink' : 'bg-transparent text-muted'}`}>{l}</button>
+          ))}
+        </div>
+
+        {mode !== 'buy' ? (
+          <form onSubmit={submitPlan} className="flex flex-col gap-4">
+            <label htmlFor="ad-text" className="flex flex-col gap-1.5">
+              <span className="text-xs font-bold tracking-widest uppercase text-muted">{mode === 'todo' ? 'What needs doing' : 'Event'}</span>
+              <input id="ad-text" ref={textRef} value={text} onChange={(e) => setText(e.target.value)} autoComplete="off"
+                placeholder={mode === 'todo' ? 'e.g. Return tags to DMV' : 'e.g. Dentist, Bubb\'s game'}
+                className="h-11 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
+            </label>
+            <div className="flex flex-col gap-1.5">
+              <span id="ad-when" className="text-xs font-bold tracking-widest uppercase text-muted">When</span>
+              <div role="group" aria-labelledby="ad-when" className="flex flex-wrap gap-1.5">
+                {([...(mode === 'todo' ? [['none', 'Anytime']] : []), ['today', 'Today'], ['tomorrow', 'Tomorrow'], ['pick', 'Pick a date']] as [typeof when, string][]).map(([k, l]) => (
+                  <button key={k} type="button" aria-pressed={when === k} onClick={() => setWhen(k)}
+                    className={`h-9 px-3 rounded-full border text-sm font-bold cursor-pointer ${when === k ? 'bg-accent border-accent text-accent-ink' : 'bg-surface-2 border-line text-fg'}`}>{l}</button>
+                ))}
+              </div>
+              {when === 'pick' && (
+                <input type="date" aria-label="Date" value={pick} onChange={(e) => setPick(e.target.value || today)}
+                  className="h-10 self-start rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
+              )}
+            </div>
+            {mode === 'todo' && dueDate && (
+              <div className="flex flex-col gap-1.5">
+                <span id="ad-rep" className="text-xs font-bold tracking-widest uppercase text-muted">Repeats</span>
+                <div role="group" aria-labelledby="ad-rep" className="flex flex-wrap gap-1.5">
+                  {(Object.keys(REPEAT_LABEL) as Repeat[]).map((r) => (
+                    <button key={r} type="button" aria-pressed={repeat === r} onClick={() => setRepeat(r)}
+                      className={`h-9 px-3 rounded-full border text-sm font-bold cursor-pointer ${repeat === r ? 'bg-accent border-accent text-accent-ink' : 'bg-surface-2 border-line text-fg'}`}>{REPEAT_LABEL[r]}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {mode === 'event' && (
+              <div className="grid grid-cols-2 gap-2.5">
+                <label htmlFor="ad-time" className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold tracking-widest uppercase text-muted">Time (optional)</span>
+                  <input id="ad-time" type="time" value={time} onChange={(e) => setTime(e.target.value)}
+                    className="h-11 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
+                </label>
+                <label htmlFor="ad-place" className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold tracking-widest uppercase text-muted">Where (optional)</span>
+                  <input id="ad-place" value={place} onChange={(e) => setPlace(e.target.value)} autoComplete="off"
+                    className="h-11 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
+                </label>
+              </div>
+            )}
+            {error && <p role="alert" className="m-0 text-sm font-bold text-bad">{error}</p>}
+            <button type="submit" disabled={busy}
+              className="h-12 rounded-2xl border-0 bg-accent text-accent-ink text-lg font-bold cursor-pointer disabled:opacity-60">
+              {busy ? 'Saving…' : mode === 'todo' ? 'Add to-do' : 'Add event'}
+            </button>
+          </form>
+        ) : (
+        <form onSubmit={submit} className="flex flex-col gap-4">
         <label htmlFor="lp-amount" className="flex items-center gap-1 border-b-2 border-accent-hi pb-1 text-4xl font-bold">
           <span>$</span><span className="sr-only">Amount</span>
           <input id="lp-amount" ref={amountRef} inputMode="decimal" autoComplete="off" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00"
@@ -131,7 +228,9 @@ export default function LogPurchase({ open, onClose, today, money: m, reloadMone
           className="h-12 rounded-2xl border-0 bg-accent text-accent-ink text-lg font-bold cursor-pointer disabled:opacity-60">
           {busy ? 'Saving…' : chosen?.with.kind === 'afterpay' ? 'Add Afterpay order' : 'Save purchase'}
         </button>
-      </form>
+        </form>
+        )}
+      </div>
     </dialog>
   )
 }

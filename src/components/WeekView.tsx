@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, weekStart } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
 import { isPayday, obligationsOn, paycheckTotal, savingsOn, type MoneyData, type Obligation } from '../lib/money'
-import { MOOD_EMOJI, type JournalEntry, type Tag, type Todo } from '../lib/types'
+import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
+import { eventsOn, timeLabel, todosOn, type Plans } from '../lib/plans'
 import JournalEditor from './JournalEditor'
 import DayBills from './DayBills'
 
@@ -16,16 +16,18 @@ interface Props {
   money: MoneyData
   moneyLoaded: boolean
   reloadMoney: () => Promise<void>
+  plans: Plans
+  dayExtra: (date: string, showAdd?: boolean) => ReactNode
+  anytime: ReactNode
 }
 
 /** The week: seven day cards, then the selected day opened below (bills + journal). */
-export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney }: Props) {
+export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime }: Props) {
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
 
   const [journal, setJournal] = useState<JournalEntry[]>([])
   const [tags, setTags] = useState<Tag[]>([])
-  const [todos, setTodos] = useState<Todo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -33,15 +35,9 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
     setLoading(true)
     setError('')
     try {
-      const [entries, allTags, todoRes] = await Promise.all([
-        loadEntries(start, end),
-        loadTags(),
-        supabase.from('todos').select('id, text, due_date, done_at, repeat').lte('due_date', end),
-      ])
-      if (todoRes.error) throw todoRes.error
+      const [entries, allTags] = await Promise.all([loadEntries(start, end), loadTags()])
       setJournal(entries)
       setTags(allTags)
-      setTodos((todoRes.data ?? []) as Todo[])
     } catch (e) {
       setError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
     }
@@ -86,7 +82,8 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
           const pay = isPayday(m, k)
           const save = savingsOn(m, k)
           const due = obligationsOn(m, k, today)
-          const dayTodos = todos.filter((t) => t.due_date === k || (k === today && !t.done_at && t.due_date !== null && t.due_date < today))
+          const dayTodos = todosOn(plans, k, today)
+          const dayEvents = eventsOn(plans, k)
           const isToday = k === today
           const isSel = k === selected
           const border = isSel ? 'border-2 border-accent-hi ring-3 ring-accent-hi/30 bg-accent-soft' : isToday ? 'border-2 border-accent-hi bg-surface' : pay ? 'border border-pay bg-surface' : 'border border-line bg-surface'
@@ -116,6 +113,13 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
 
               {due.map((o) => <Chip key={o.key} o={o} />)}
 
+              {dayEvents.map((e) => (
+                <span key={e.id} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold min-w-0 bg-surface-2 border border-line">
+                  <span className="size-2.5 rounded-full shrink-0 bg-accent-hi" />
+                  <span className="truncate">{e.start_time ? `${timeLabel(e.start_time)} ` : ''}{e.title}</span>
+                </span>
+              ))}
+
               {dayTodos.map((t) => (
                 <span key={t.id} className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold min-w-0 ${t.due_date && t.due_date < today && !t.done_at ? 'bg-warn-soft text-warn' : 'bg-accent-soft'}`}>
                   <span aria-hidden="true">{t.done_at ? '☑' : '☐'}</span>
@@ -137,6 +141,8 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
         })}
       </div>
 
+      {anytime}
+
       {!loading && !error && moneyLoaded && (
         <JournalEditor
           key={selected}
@@ -147,7 +153,7 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
           allTags={tags}
           onSaved={onSaved}
           onTagCreated={onTagCreated}
-          side={<DayBills date={selected} today={today} money={m} reloadMoney={reloadMoney} />}
+          side={<><DayBills date={selected} today={today} money={m} reloadMoney={reloadMoney} />{dayExtra(selected)}</>}
         />
       )}
     </main>

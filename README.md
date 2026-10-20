@@ -30,12 +30,14 @@ src/
     PhoneHome.tsx      phone Home: balances, savings, next 3 days, 3-day journal
     MonthView.tsx      month calendar with the selected day below
     icons.tsx          line icons
-    LogPurchase.tsx    the + Log window (SoFi heads-up, Afterpay split)
+    LogPurchase.tsx    the + Add window: purchase (SoFi heads-up, Afterpay split), to-do, event
+    Plans.tsx          to-do rows, a day's plans, the anytime to-do card
     JournalEditor.tsx  write a day: mood, tags, timestamps, emojis, autosave
     JournalSearch.tsx  header search across journal text and tags
   lib/
     journal.ts         journal reads/writes, tags, search
     money.ts           what's due each day, paydays, balances, savings, spending
+    plans.ts           to-dos and events, repeating to-dos
     useIsPhone.ts      switches to the phone layout under 768px wide
     supabase.ts        Supabase client (anon key only; row-level security protects data)
     dates.ts           local-calendar date helpers (no UTC day shifts)
@@ -52,6 +54,6 @@ supabase/
 3. ✅ Bills: cards, mark paid with actual amount, Afterpay orders, subscriptions, other monthly bills
 4. ✅ Money: balances (estimated since last update), paycheck split, savings challenge, purchase log (+ Log), auto-logged subscriptions
 5. ✅ Phone layout: Home (balances, savings, next 3 days, 3-day journal), month calendar, bottom tabs with +
-6. To-dos and calendar events
+6. ✅ To-dos (anytime, dated, late roll forward, repeating) and calendar events; + Add: Purchase | To-do | Event
 7. Trips: itinerary, standby / award certificate flights, travelers, packing, passports
 8. Later: alerts, "ask it" (can I afford this?), confirmation-email import

@@ -7,6 +7,7 @@ import {
 } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
 import DayBills from './DayBills'
+import { eventsOn, todosOn, type Plans } from '../lib/plans'
 import { Eye, EyeOff } from './icons'
 import JournalEditor from './JournalEditor'
 
@@ -17,10 +18,12 @@ interface Props {
   moneyLoaded: boolean
   reloadMoney: () => Promise<void>
   extra?: ReactNode        // to-dos and travel cards plug in here
+  plans: Plans
+  dayExtra?: (date: string, showAdd?: boolean) => ReactNode
 }
 
 /** Phone Home: balances, savings challenge, next 3 days, 3-day journal. */
-export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra }: Props) {
+export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, plans, dayExtra }: Props) {
   const days = [0, 1, 2].map((i) => addDays(today, i))
   const [journal, setJournal] = useState<JournalEntry[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -49,6 +52,9 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
   const saved = challengeSteps(m).reduce((t, s) => t + (s.deposit ? s.amount : 0), 0)
   const goal = challengeGoal(m)
   const label = (i: number) => (i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : DAYS[dateOf(days[i]).getDay()])
+
+  // Home's 3-day list shows plans without the per-day add box (the + button and To-do card cover adding)
+  const dayExtraNoAdd = (k: string) => (dayExtra ? dayExtra(k, false) : null)
 
   if (!moneyLoaded) return <p className="m-0 text-muted">Loading…</p>
 
@@ -110,6 +116,7 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
         {days.map((k, i) => {
           const d = dateOf(k)
           const busy = isPayday(m, k) || Boolean(savingsOn(m, k)) || obligationsOn(m, k, today).length > 0
+          const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0
           return (
             <div key={k} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2.5">
               <div className="flex flex-col items-center pt-1">
@@ -117,8 +124,9 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
                 <b className={`text-2xl leading-tight tnum ${i === 0 ? 'text-accent' : ''}`}>{d.getDate()}</b>
               </div>
               <div className="min-w-0">
-                {busy ? <DayBills date={k} today={today} money={m} reloadMoney={reloadMoney} />
-                  : <p className="m-0 py-2.5 text-sm text-muted">Nothing scheduled{i === 0 ? ' today' : ''}</p>}
+                {busy && <DayBills date={k} today={today} money={m} reloadMoney={reloadMoney} />}
+                {hasPlans && <div className={busy ? 'mt-2' : ''}>{dayExtraNoAdd(k)}</div>}
+                {!busy && !hasPlans && <p className="m-0 py-2.5 text-sm text-muted">Nothing scheduled{i === 0 ? ' today' : ''}</p>}
               </div>
             </div>
           )
