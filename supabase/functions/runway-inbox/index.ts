@@ -228,7 +228,7 @@ export function htmlToText(html: string): string {
 export function tidy(s: string): string {
   return s
     .replace(/\r/g, '')
-    .replace(/https?:\/\/\S{70,}/g, '[link]')
+    .replace(/https?:\/\/\S{70,}/g, (u) => (/^https:\/\/mail(-settings)?\.google\.com\//.test(u) ? u : '[link]'))
     .replace(/[ \t ​‌͏]+/g, ' ')
     .replace(/ *\n */g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -265,7 +265,7 @@ function pastedHeaders(text: string) {
 }
 
 async function gmailConfirmation(db: SupabaseClient, row: EmailRow) {
-  const code = row.body.match(/confirmation code:\s*(\d{6,12})/i)?.[1] ?? null
+  const code = row.body.match(/confirmation code\D{0,5}(\d{6,12})/i)?.[1] ?? row.subject?.match(/#(\d{6,12})/)?.[1] ?? row.body.match(/\b(\d{9})\b/)?.[1] ?? null
   const link = row.body.match(/https:\/\/mail(?:-settings)?\.google\.com\/mail\/\S+/)?.[0] ?? null
   await db.from('inbox_emails').update({
     status: 'review', kind: 'gmail_confirm', summary: 'Gmail wants you to confirm forwarding to Runway',

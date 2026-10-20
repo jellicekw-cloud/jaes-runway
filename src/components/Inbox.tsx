@@ -274,19 +274,33 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
       </div>
 
       {/* Gmail's confirmation email: show the code, nothing to add */}
-      {e.kind === 'gmail_confirm' ? (
+      {e.kind === 'gmail_confirm' ? (() => {
+        const code = e.suggestion.code
+          ?? e.subject?.match(/#(\d{6,12})/)?.[1]
+          ?? e.body.match(/confirmation code\D{0,5}(\d{6,12})/i)?.[1]
+          ?? e.body.match(/\b(\d{9})\b/)?.[1]
+          ?? null
+        return (
         <>
           <p className="m-0 text-sm">Gmail sent this when you added Runway as a forwarding address. Use the code in Gmail, or open the link.</p>
-          {e.suggestion.code && (
+          {code ? (
             <div className="flex items-center gap-2">
-              <code className="text-2xl font-bold tracking-widest tnum">{e.suggestion.code}</code>
-              <button type="button" className={btnPlain} onClick={() => { void navigator.clipboard?.writeText(e.suggestion.code ?? ''); setCopied(true) }}>{copied ? 'Copied' : 'Copy'}</button>
+              <code className="text-2xl font-bold tracking-widest tnum">{code}</code>
+              <button type="button" className={btnPlain} onClick={() => { void navigator.clipboard?.writeText(code); setCopied(true) }}>{copied ? 'Copied' : 'Copy'}</button>
             </div>
-          )}
+          ) : <p className="m-0 text-sm font-bold">The code wasn't found automatically. Tap Show email and look for it there.</p>}
           {e.suggestion.link && <a href={e.suggestion.link} target="_blank" rel="noreferrer" className="text-accent font-bold text-sm break-all">Open the confirmation link</a>}
-          <div className="flex gap-2"><button type="button" disabled={busy} className={btnMain} onClick={() => void act(() => setEmailStatus(e.id, 'added'))}>Done</button></div>
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={busy} className={btnMain} onClick={() => void act(() => setEmailStatus(e.id, 'added'))}>Done</button>
+            <button type="button" aria-expanded={showBody} onClick={() => setShowBody(!showBody)}
+              className="ml-auto bg-transparent border-0 text-accent text-sm font-bold cursor-pointer">{showBody ? 'Hide email' : 'Show email'}</button>
+          </div>
+          {showBody && (
+            <pre className="m-0 max-h-72 overflow-auto rounded-xl bg-surface-2 border border-line p-3 text-xs whitespace-pre-wrap break-words font-[inherit]">{e.body || '(empty)'}</pre>
+          )}
         </>
-      ) : (
+        )
+      })() : (
         <>
           {e.status === 'error' ? (
             <p className="m-0 text-sm font-bold text-bad">Couldn't read this one{e.error ? `: ${e.error}` : '.'}</p>
