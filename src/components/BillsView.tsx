@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { money, shortDate } from '../lib/dates'
+import { addDays, money, shortDate } from '../lib/dates'
 import {
-  addAfterpayOrder, deleteRow, dueBeforePayday, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
+  addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
   parseMoney, undoPayment, updateRow, type MoneyData,
 } from '../lib/money'
 import { SWATCHES, type AfterpayOrder, type Bill, type Card, type Subscription } from '../lib/types'
@@ -327,6 +327,8 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
   })
   const paid = tiles.filter((t) => t.ob.status === 'paid').length
   const from = o.account_id ? m.accounts.find((a) => a.id === o.account_id)?.institution : o.card_id ? m.cards.find((c) => c.id === o.card_id)?.name : null
+  const bought = m.transactions.find((x) => x.afterpay_order_id === o.id)?.occurred_on
+  const [editDates, setEditDates] = useState(false)
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0">
@@ -338,6 +340,19 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
       <span className="h-2.5 rounded-full bg-line overflow-hidden">
         <span className="block h-full rounded-full bg-[#0EA5E9]" style={{ width: `${(paid / o.installments) * 100}%` }} />
       </span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted">
+        <span>{bought ? `Bought ${shortDate(bought)} · ` : ''}first payment {shortDate(o.order_date)}</span>
+        {editDates ? (
+          <label htmlFor={`ap-first-${o.id}`} className="inline-flex items-center gap-2">
+            <span className="font-bold text-fg">First payment due</span>
+            <input id={`ap-first-${o.id}`} type="date" defaultValue={o.order_date}
+              onChange={(e) => { const v = e.target.value; if (v) void run(() => setAfterpayFirstPayment(o.id, v)).then(() => setEditDates(false)) }}
+              className="h-9 rounded-lg border border-line bg-surface-2 px-2 text-fg focus:outline-2 focus:outline-accent-hi" />
+          </label>
+        ) : (
+          <button type="button" onClick={() => setEditDates(true)} className="bg-transparent border-0 p-0 text-accent font-bold underline cursor-pointer">Change dates</button>
+        )}
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
         {tiles.map(({ n, date, ob }) => (
           <div key={n} className={`flex flex-col gap-1 rounded-xl border p-2 text-sm tnum ${ob.status === 'paid' ? 'border-pay text-pay-ink' : ob.status === 'overdue' ? 'border-bad text-bad' : 'border-line'}`}>
@@ -363,9 +378,12 @@ function AddOrder({ payFrom, today, run, m }: { payFrom: { value: string; label:
   const [total, setTotal] = useState('')
   const [date, setDate] = useState(today)
   const [src, setSrc] = useState(nfcu)
+  const [skip, setSkip] = useState(false)
+  const [first, setFirst] = useState(addDays(today, 14))
   const t = parseMoney(total)
+  const firstDue = skip ? first : date
   const preview = t && t > 0 ? Array.from({ length: 4 }, (_, i) => {
-    const o: AfterpayOrder = { id: '', name, total: t, order_date: date, installments: 4, interval_days: 14, account_id: null, card_id: null }
+    const o: AfterpayOrder = { id: '', name, total: t, order_date: firstDue, installments: 4, interval_days: 14, account_id: null, card_id: null }
     return `${shortDate(installmentDate(o, i + 1))} ${money(installmentAmount(o, i + 1))}`
   }).join(' · ') : ''
 
@@ -373,8 +391,8 @@ function AddOrder({ payFrom, today, run, m }: { payFrom: { value: string; label:
     e.preventDefault()
     if (!t || t <= 0) return
     void run(async () => {
-      await addAfterpayOrder(m, { name: name.trim() || 'Afterpay order', total: t, order_date: date, ...splitSource(src) })
-      setName(''); setTotal(''); setDate(today)
+      await addAfterpayOrder(m, { name: name.trim() || 'Afterpay order', total: t, purchased_on: date, first_payment: firstDue, ...splitSource(src) })
+      setName(''); setTotal(''); setDate(today); setSkip(false); setFirst(addDays(today, 14))
     })
   }
 
@@ -394,12 +412,25 @@ function AddOrder({ payFrom, today, run, m }: { payFrom: { value: string; label:
         </label>
         <label htmlFor="ap-date" className="flex flex-col gap-1">
           <span className="text-xs font-bold tracking-wider uppercase text-muted">Order date</span>
-          <input id="ap-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required
+          <input id="ap-date" type="date" value={date} onChange={(e) => { setDate(e.target.value); if (e.target.value && !skip) setFirst(addDays(e.target.value, 14)) }} required
             className="h-10 rounded-lg border border-line bg-surface-2 px-2.5 text-fg focus:outline-2 focus:outline-accent-hi" />
         </label>
         <SourceSelect id="ap-src" value={src} options={payFrom} onChange={setSrc} label="Afterpay charges" />
       </div>
-      {preview && <p className="m-0 rounded-xl bg-accent-soft px-3 py-2 text-sm"><b>4 payments:</b> {preview}. The first is paid at checkout.</p>}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label className="inline-flex items-center gap-2.5 font-bold">
+          <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} className="size-5 accent-[var(--accent)]" />
+          First payment isn't due at checkout (skipped / pay later)
+        </label>
+        {skip && (
+          <label htmlFor="ap-first" className="inline-flex items-center gap-2">
+            <span className="text-xs font-bold tracking-wider uppercase text-muted">First payment due</span>
+            <input id="ap-first" type="date" min={date} value={first} onChange={(e) => setFirst(e.target.value || first)}
+              className="h-10 rounded-lg border border-line bg-surface-2 px-2.5 text-fg focus:outline-2 focus:outline-accent-hi" />
+          </label>
+        )}
+      </div>
+      {preview && <p className="m-0 rounded-xl bg-accent-soft px-3 py-2 text-sm"><b>4 payments:</b> {preview}. {skip ? 'Nothing is paid today.' : 'The first is paid at checkout.'}</p>}
       <button type="submit" className="self-start h-11 px-5 rounded-xl border-0 bg-accent text-accent-ink font-bold cursor-pointer">Add order</button>
     </form>
   )

@@ -30,6 +30,8 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
   const [category, setCategory] = useState<string>('Other')
   const [date, setDate] = useState(today)
   const [withKey, setWithKey] = useState('')
+  const [apSkip, setApSkip] = useState(false)
+  const [apFirst, setApFirst] = useState(addDays(today, 14))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   // to-do / event fields
@@ -52,7 +54,7 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
     const el = dialog.current
     if (!el) return
     if (open && !el.open) {
-      setAmount(''); setWhat(''); setCategory('Other'); setDate(today); setError('')
+      setAmount(''); setWhat(''); setCategory('Other'); setDate(today); setError(''); setApSkip(false); setApFirst(addDays(today, 14))
       setText(''); setWhen(mode === 'event' ? 'today' : 'none'); setPick(today); setRepeat('none'); setTime(''); setPlace('')
       setWithKey(nfcu ? `a:${nfcu}` : options[0]?.key ?? '')
       el.showModal()
@@ -63,7 +65,8 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
   }, [open])
 
   const amt = parseMoney(amount)
-  const chosen = options.find((o) => o.key === withKey)
+  const picked = options.find((o) => o.key === withKey)
+  const chosen = picked && picked.with.kind === 'afterpay' ? { ...picked, with: { kind: 'afterpay', firstPayment: apSkip ? apFirst : date } as PayWith } : picked
   const hint = buildHint(m, today, chosen?.with, amt, date)
 
   const dueDate = when === 'today' ? today : when === 'tomorrow' ? addDays(today, 1) : when === 'pick' ? pick : null
@@ -96,7 +99,7 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
       await logPurchase(m, { amount: amt, description, category, date, with: chosen.with })
       await reloadMoney()
       onLogged(chosen.with.kind === 'afterpay'
-        ? `Afterpay order added · ${money(installmentAmount({ total: amt, installments: 4 }, 1))} today`
+        ? (apSkip ? `Afterpay order added · first payment ${shortDate(apFirst)}` : `Afterpay order added · ${money(installmentAmount({ total: amt, installments: 4 }, 1))} today`)
         : `Logged ${money(amt)} · ${description}`)
       onClose()
     } catch (err) {
@@ -213,9 +216,25 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
 
         <label htmlFor="lp-date" className="flex items-center justify-between gap-3">
           <span className="text-xs font-bold tracking-widest uppercase text-muted">Date</span>
-          <input id="lp-date" type="date" value={date} max={today} onChange={(e) => setDate(e.target.value || today)}
+          <input id="lp-date" type="date" value={date} max={today} onChange={(e) => { const v = e.target.value || today; setDate(v); if (!apSkip) setApFirst(addDays(v, 14)) }}
             className="h-10 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
         </label>
+
+        {picked?.with.kind === 'afterpay' && (
+          <div className="flex flex-col gap-2">
+            <label className="inline-flex items-center gap-2.5 font-bold">
+              <input type="checkbox" checked={apSkip} onChange={(e) => setApSkip(e.target.checked)} className="size-5 accent-[var(--accent)]" />
+              First payment isn't due today (skipped / pay later)
+            </label>
+            {apSkip && (
+              <label htmlFor="lp-ap-first" className="flex items-center justify-between gap-3">
+                <span className="text-xs font-bold tracking-widest uppercase text-muted">First payment due</span>
+                <input id="lp-ap-first" type="date" min={date} value={apFirst} onChange={(e) => setApFirst(e.target.value || apFirst)}
+                  className="h-10 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
+              </label>
+            )}
+          </div>
+        )}
 
         {hint && (
           <p role="status" className={`m-0 rounded-xl px-3.5 py-3 text-sm leading-snug ${hint.warn ? 'bg-warn-soft border border-warn' : 'bg-accent-soft'}`}>
@@ -240,9 +259,11 @@ function buildHint(m: MoneyData, today: string, w: PayWith | undefined, amt: num
   if (!w) return null
   if (w.kind === 'afterpay') {
     if (!amt) return { title: 'Splits into 4 payments.', text: 'Enter the order total to see the dates.', warn: false }
-    const o = { total: amt, installments: 4, order_date: date, interval_days: 14 }
-    const parts = [1, 2, 3, 4].map((n) => `${n === 1 ? 'today' : shortDate(installmentDate(o, n))} ${money(installmentAmount(o, n))}`)
-    return { title: 'Splits into 4 payments:', text: `${parts.join(', ')}. Only the first counts as spent today.`, warn: false }
+    const firstDue = w.firstPayment ?? date
+    const o = { total: amt, installments: 4, order_date: firstDue, interval_days: 14 }
+    const later = firstDue > date
+    const parts = [1, 2, 3, 4].map((n) => `${n === 1 && !later && date === today ? 'today' : shortDate(installmentDate(o, n))} ${money(installmentAmount(o, n))}`)
+    return { title: 'Splits into 4 payments:', text: `${parts.join(', ')}. ${later ? 'Nothing comes out today.' : 'Only the first counts as spent today.'}`, warn: false }
   }
   if (w.kind !== 'account') return null
   const acct = m.accounts.find((a) => a.id === w.id)

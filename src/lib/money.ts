@@ -348,12 +348,15 @@ export async function setHideBalances(hide: boolean): Promise<void> {
 // Spending log
 // ---------------------------------------------------------------------------
 
-export type PayWith = { kind: 'account'; id: string } | { kind: 'card'; id: string } | { kind: 'afterpay' }
+/** Afterpay: firstPayment is when payment 1 is due. Same as the purchase date = paid at checkout; later = you skipped/deferred it. */
+export type PayWith = { kind: 'account'; id: string } | { kind: 'card'; id: string } | { kind: 'afterpay'; firstPayment?: string }
 
 /** Logs a purchase. A card purchase adds to that card's balance; Afterpay creates an order with 4 payments. */
 export async function logPurchase(d: MoneyData, p: { amount: number; description: string; category: string; date: string; with: PayWith }): Promise<void> {
   if (p.with.kind === 'afterpay') {
-    await addAfterpayOrder(d, { name: p.description, total: p.amount, order_date: p.date, account_id: billsAccountId(d), card_id: null }, p.category)
+    await addAfterpayOrder(d, {
+      name: p.description, total: p.amount, purchased_on: p.date, first_payment: p.with.firstPayment ?? p.date, account_id: billsAccountId(d), card_id: null,
+    }, p.category)
     return
   }
   const row = {
@@ -462,25 +465,36 @@ export async function deleteRow(table: Table, id: string): Promise<void> {
 }
 
 /**
- * Adds an Afterpay order. The first payment is taken at checkout, so it's recorded
- * as paid on the order date. The purchase itself goes in the spending log once, for
- * the full amount; the four payments are what come out of checking over time.
+ * Adds an Afterpay order. The 4 payments are scheduled from first_payment, which is
+ * stored as the order's schedule date (order_date). When the first payment is taken at
+ * checkout (first_payment = purchased_on) it's recorded as paid; when it's skipped or
+ * deferred, nothing is paid yet. The purchase goes in the spending log once, on the day
+ * you bought it, for the full amount.
  */
 export async function addAfterpayOrder(
   _d: MoneyData,
-  fields: { name: string; total: number; order_date: string; account_id: string | null; card_id: string | null },
+  fields: { name: string; total: number; purchased_on: string; first_payment: string; account_id: string | null; card_id: string | null },
   category = 'Shopping',
 ): Promise<void> {
-  const id = await insertRow('afterpay_orders', { ...fields, installments: 4, interval_days: 14 })
-  const first = installmentAmount({ total: fields.total, installments: 4 }, 1)
-  const { error } = await supabase.from('payments').insert({
-    afterpay_order_id: id, installment_no: 1, due_date: fields.order_date, amount: first, paid_on: fields.order_date, account_id: fields.account_id,
-  })
-  if (error) throw error
+  const { purchased_on, first_payment, ...rest } = fields
+  const id = await insertRow('afterpay_orders', { ...rest, order_date: first_payment, installments: 4, interval_days: 14 })
+  if (first_payment <= purchased_on) {
+    const first = installmentAmount({ total: fields.total, installments: 4 }, 1)
+    const { error } = await supabase.from('payments').insert({
+      afterpay_order_id: id, installment_no: 1, due_date: first_payment, amount: first, paid_on: purchased_on, account_id: fields.account_id,
+    })
+    if (error) throw error
+  }
   const { error: e2 } = await supabase.from('transactions').insert({
-    occurred_on: fields.order_date, amount: fields.total, description: `${fields.name} (Afterpay)`, category, source: 'afterpay', afterpay_order_id: id,
+    occurred_on: purchased_on, amount: fields.total, description: `${fields.name} (Afterpay)`, category, source: 'afterpay', afterpay_order_id: id,
   })
   if (e2) throw e2
+}
+
+/** Moves an order's payment schedule: payment 1 on this date, the rest every 2 weeks after. */
+export async function setAfterpayFirstPayment(orderId: string, firstPayment: string): Promise<void> {
+  const { error } = await supabase.from('afterpay_orders').update({ order_date: firstPayment }).eq('id', orderId)
+  if (error) throw error
 }
 
 /** Parses "$1,234.50" style input. Empty → null. */
