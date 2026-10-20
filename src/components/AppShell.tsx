@@ -7,6 +7,8 @@ import WeekView from './WeekView'
 import BillsView from './BillsView'
 import MoneyView from './MoneyView'
 import LogPurchase from './LogPurchase'
+import PhoneShell from './PhoneShell'
+import { useIsPhone } from '../lib/useIsPhone'
 
 type Tab = 'week' | 'bills' | 'money'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money' }
@@ -14,6 +16,7 @@ const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'M
 /** Header, tabs and the money data every screen shares. */
 export default function AppShell({ email, userId }: { email: string; userId: string }) {
   const today = todayKey()
+  const isPhone = useIsPhone()
   const [tab, setTab] = useState<Tab>('week')
   const [selected, setSelected] = useState(today)
   const [moneyData, setMoneyData] = useState<MoneyData>(EMPTY_MONEY)
@@ -60,6 +63,28 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   function openDay(date: string) {
     setSelected(date)
     setTab('week')
+  }
+
+  const shared = (
+    <>
+      <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
+      {toast && (
+        <div role="status" className="fixed left-1/2 -translate-x-1/2 z-30 rounded-full bg-header text-white px-5 py-2.5 font-bold shadow-2xl whitespace-nowrap"
+          style={{ bottom: isPhone ? 'calc(104px + env(safe-area-inset-bottom, 0px))' : '24px' }}>
+          {toast}
+        </div>
+      )}
+    </>
+  )
+
+  if (isPhone) {
+    return (
+      <>
+        <PhoneShell userId={userId} today={today} money={moneyData} moneyLoaded={moneyLoaded} moneyError={moneyError}
+          reloadMoney={reloadMoney} onLog={() => setLogOpen(true)} />
+        {shared}
+      </>
+    )
   }
 
   return (
@@ -143,14 +168,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => setLogOpen(true)} />}
 
-      <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
-
-      {toast && (
-        <div role="status" className="fixed left-1/2 -translate-x-1/2 bottom-6 z-30 rounded-full bg-header text-white px-5 py-2.5 font-bold shadow-2xl"
-          style={{ marginBottom: 'env(safe-area-inset-bottom, 0px)' }}>
-          {toast}
-        </div>
-      )}
+      {shared}
     </div>
   )
 }

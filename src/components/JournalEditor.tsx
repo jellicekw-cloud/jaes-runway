@@ -19,12 +19,14 @@ interface Props {
   onTagCreated: (tag: Tag) => void
   /** Shown at the top of the right-hand column (payday, bills due, auto-pay) */
   side?: ReactNode
+  /** Inside a phone card: no outer frame and no big date title */
+  compact?: boolean
 }
 
 const timeNow = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 /** Mounted with key={date}, so each day starts fresh and any unsaved text is saved when you switch days. */
-export default function JournalEditor({ userId, date, today, entry, allTags, onSaved, onTagCreated, side }: Props) {
+export default function JournalEditor({ userId, date, today, entry, allTags, onSaved, onTagCreated, side, compact }: Props) {
   const [body, setBody] = useState(entry?.body ?? '')
   const [mood, setMood] = useState<Mood | null>(entry?.mood ?? null)
   const [tags, setTags] = useState<Tag[]>(entry?.tags ?? [])
@@ -183,9 +185,11 @@ export default function JournalEditor({ userId, date, today, entry, allTags, onS
 
   return (
     <section aria-label={`Journal for ${title}`}
-      className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_430px] gap-5 rounded-2xl border border-line border-t-[5px] border-t-accent-hi bg-surface p-4 sm:p-5">
+      className={compact
+        ? 'flex flex-col-reverse gap-4 p-2'
+        : 'grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_430px] gap-5 rounded-2xl border border-line border-t-[5px] border-t-accent-hi bg-surface p-4 sm:p-5'}>
       <div className="flex flex-col gap-3 min-w-0">
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className={compact ? 'sr-only' : 'flex flex-wrap items-center gap-2.5'}>
           <h2 className="m-0 text-3xl font-bold leading-tight">{title}</h2>
           {date === today && <span className="rounded-full bg-accent text-accent-ink px-2.5 py-0.5 text-xs font-extrabold tracking-wider">TODAY</span>}
           {date > today && <span className="rounded-full bg-accent-soft text-accent px-2.5 py-0.5 text-xs font-extrabold tracking-wider">UPCOMING</span>}
@@ -196,7 +200,7 @@ export default function JournalEditor({ userId, date, today, entry, allTags, onS
           id="journal-body" ref={textRef} value={body} onFocus={onFocus}
           onChange={(e) => { setBody(e.target.value); latest.current.body = e.target.value; schedule() }}
           placeholder="Write about your day…"
-          className="min-h-60 h-[32vh] resize-y rounded-2xl border border-line bg-surface-2 p-4 text-[17px] leading-relaxed text-fg focus:outline-2 focus:outline-accent-hi"
+          className={`${compact ? 'min-h-44 h-[26vh]' : 'min-h-60 h-[32vh]'} resize-y rounded-2xl border border-line bg-surface-2 p-4 text-[17px] leading-relaxed text-fg focus:outline-2 focus:outline-accent-hi`}
         />
 
         <div className="flex flex-wrap items-center gap-1.5">

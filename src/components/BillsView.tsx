@@ -85,7 +85,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
 
       <Section title="Subscriptions" right={<span className="font-bold tnum">{money(subMonthly)}/mo · {money(subMonthly * 12)}/yr</span>}>
         <p className="m-0 text-sm text-muted">These charge on their own, so there's nothing to mark paid. Change an amount here when a price goes up.</p>
-        <div className="rounded-2xl border border-line bg-surface overflow-x-auto">
+        <div className="relative rounded-2xl border border-line bg-surface overflow-x-auto">
           <table className="w-full border-collapse text-sm min-w-[620px]">
             <thead>
               <tr className="text-left text-xs uppercase tracking-widest text-muted">
