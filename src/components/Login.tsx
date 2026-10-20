@@ -25,9 +25,8 @@ export default function Login() {
       <div className="flex-1 grid place-items-center py-10">
         <form onSubmit={onSubmit} className="w-full max-w-sm flex flex-col gap-5">
           <div className="flex flex-col items-center gap-3 text-center">
-            <img src="/icon-192.png" alt="" width={72} height={72} className="rounded-2xl" />
-            <h1 className="m-0 text-4xl font-bold">Jae's Runway</h1>
-            <p className="m-0 text-header-muted">Calendar, journal, money and trips</p>
+            <img src="/logo-emblem.png" alt="" width={240} height={240} className="w-60 max-w-[70vw] h-auto drop-shadow-[0_18px_30px_rgba(0,0,0,.5)]" />
+            <h1 className="sr-only">Jae's Runway</h1>
           </div>
 
           <label className="flex flex-col gap-1.5" htmlFor="email">
