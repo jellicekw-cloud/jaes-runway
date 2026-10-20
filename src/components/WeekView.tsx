@@ -6,6 +6,8 @@ import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
 import { eventsOn, timeLabel, todosOn, type Plans } from '../lib/plans'
 import JournalEditor from './JournalEditor'
 import DayBills from './DayBills'
+import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
+import { ItemIcon } from './Trips'
 
 interface Props {
   email: string
@@ -19,10 +21,11 @@ interface Props {
   plans: Plans
   dayExtra: (date: string, showAdd?: boolean) => ReactNode
   anytime: ReactNode
+  trips: TripsData
 }
 
 /** The week: seven day cards, then the selected day opened below (bills + journal). */
-export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime }: Props) {
+export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime, trips }: Props) {
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
 
@@ -84,6 +87,8 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
           const due = obligationsOn(m, k, today)
           const dayTodos = todosOn(plans, k, today)
           const dayEvents = eventsOn(plans, k)
+          const away = tripsOn(trips, k)
+          const tripItems = itemsOn(trips, k)
           const isToday = k === today
           const isSel = k === selected
           const border = isSel ? 'border-2 border-accent-hi ring-3 ring-accent-hi/30 bg-accent-soft' : isToday ? 'border-2 border-accent-hi bg-surface' : pay ? 'border border-pay bg-surface' : 'border border-line bg-surface'
@@ -96,6 +101,19 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
                 <span className="text-2xl leading-none">{entry?.mood ? MOOD_EMOJI[entry.mood] : ''}</span>
               </span>
               <span className={`text-3xl font-bold leading-none tnum mb-1 ${isToday ? 'text-accent' : ''}`}>{d.getDate()}</span>
+
+              {away.map((t) => (
+                <span key={t.id} className="flex items-center gap-1.5 rounded-lg bg-accent-hi text-white px-2 py-1 text-xs font-bold min-w-0">
+                  <span aria-hidden="true">✈</span><span className="truncate">{t.name}</span>
+                </span>
+              ))}
+
+              {tripItems.map((x) => (
+                <span key={`${x.item.id}:${x.part}`} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold min-w-0 bg-accent-soft border border-accent-hi/40">
+                  <span className="text-accent shrink-0"><ItemIcon kind={x.item.kind} size={14} /></span>
+                  <span className="truncate">{x.time ? `${timeLabel(x.time)} ` : ''}{x.label}</span>
+                </span>
+              ))}
 
               {pay && (
                 <span className="self-start rounded-full bg-pay text-white text-xs font-bold px-2.5 py-0.5">

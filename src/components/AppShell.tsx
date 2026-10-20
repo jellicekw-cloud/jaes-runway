@@ -11,9 +11,12 @@ import { AnytimeTodos, DayPlans } from './Plans'
 import { EMPTY_PLANS, loadPlans, type Plans } from '../lib/plans'
 import PhoneShell from './PhoneShell'
 import { useIsPhone } from '../lib/useIsPhone'
+import { EMPTY_TRIPS, loadTrips, type TripsData } from '../lib/trips'
+import TripsView, { DayTrips, TravelCard, TripModeCard } from './Trips'
+import type { PhoneTab } from './PhoneShell'
 
-type Tab = 'week' | 'bills' | 'money'
-const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money' }
+type Tab = 'week' | 'bills' | 'money' | 'trips'
+const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
 
 /** Header, tabs and the money data every screen shares. */
 export default function AppShell({ email, userId }: { email: string; userId: string }) {
@@ -28,6 +31,11 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [addMode, setAddMode] = useState<AddMode>('buy')
   const [plans, setPlans] = useState<Plans>(EMPTY_PLANS)
   const [plansError, setPlansError] = useState('')
+  const [trips, setTrips] = useState<TripsData>(EMPTY_TRIPS)
+  const [tripsLoaded, setTripsLoaded] = useState(false)
+  const [tripsError, setTripsError] = useState('')
+  const [openTripId, setOpenTripId] = useState<string | null>(null)
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>('home')
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
   const subsLogged = useRef(false)
@@ -58,8 +66,30 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
   useEffect(() => { void reloadPlans() }, [reloadPlans])
 
+  const reloadTrips = useCallback(async () => {
+    try { setTrips(await loadTrips()); setTripsError('') } catch (e) {
+      setTripsError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
+    }
+    setTripsLoaded(true)
+  }, [])
+
+  useEffect(() => { void reloadTrips() }, [reloadTrips])
+
+  function openTrip(id: string | null) {
+    setOpenTripId(id)
+    if (isPhone) setPhoneTab('trips')
+    else setTab('trips')
+    window.scrollTo({ top: 0 })
+  }
+
   const openAdd = (mode: AddMode = 'buy') => { setAddMode(mode); setLogOpen(true) }
-  const dayPlans = (date: string, showAdd = true) => <DayPlans date={date} today={today} plans={plans} reload={reloadPlans} showAdd={showAdd} />
+  const dayPlans = (date: string, showAdd = true) => (
+    <>
+      <DayTrips date={date} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
+      <DayPlans date={date} today={today} plans={plans} reload={reloadPlans} showAdd={showAdd} />
+    </>
+  )
+  const tripsView = <TripsView today={today} data={trips} loaded={tripsLoaded} error={tripsError} reload={reloadTrips} openId={openTripId} onOpen={(id) => { setOpenTripId(id); window.scrollTo({ top: 0 }) }} />
 
   function showToast(message: string) {
     setToast(message)
@@ -103,10 +133,13 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   if (isPhone) {
     return (
       <>
-        <PhoneShell userId={userId} today={today} money={moneyData} moneyLoaded={moneyLoaded} moneyError={moneyError}
+        <PhoneShell userId={userId} today={today} tab={phoneTab} onTab={(t) => { setPhoneTab(t); if (t === 'trips') setOpenTripId(null) }}
+          money={moneyData} moneyLoaded={moneyLoaded} moneyError={moneyError}
           reloadMoney={reloadMoney} onLog={() => openAdd('buy')}
           homeExtra={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />}
-          plans={plans} dayExtra={dayPlans} />
+          homeTop={<TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />}
+          homeBottom={tripsLoaded ? <TravelCard today={today} data={trips} onOpenTrip={openTrip} onPlan={() => openTrip(null)} /> : null}
+          plans={plans} trips={trips} tripsView={tripsView} dayExtra={dayPlans} />
         {shared}
       </>
     )
@@ -119,8 +152,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         <div className="text-2xl font-bold">Jae's Runway</div>
 
         <div role="tablist" aria-label="Screens" className="inline-flex gap-1 rounded-xl bg-header-2 p-1">
-          {(['week', 'bills', 'money'] as Tab[]).map((t) => (
-            <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+          {(['week', 'bills', 'money', 'trips'] as Tab[]).map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => { setTab(t); if (t === 'trips') setOpenTripId(null) }}
               className={`h-9 px-4 rounded-lg border-0 font-bold cursor-pointer ${tab === t ? 'bg-accent-hi text-white' : 'bg-transparent text-header-muted hover:text-white'}`}>
               {TAB_LABEL[t]}
             </button>
@@ -189,9 +222,10 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       {tab === 'week' && (
         <WeekView email={email} userId={userId} today={today} selected={selected} onSelect={setSelected}
           money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
-          plans={plans} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
+          plans={plans} trips={trips} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
       )}
       {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
+      {tab === 'trips' && tripsView}
       {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} />}
 
       {shared}

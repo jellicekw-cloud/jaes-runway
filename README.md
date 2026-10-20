@@ -25,6 +25,7 @@ src/
     WeekView.tsx       week of paydays, bills, subscriptions, to-dos, journal
     DayBills.tsx       the selected day's payday, bills due (Mark paid) and auto-pay
     BillsView.tsx      Bills tab: overview, cards, Afterpay, subscriptions, other bills
+    Trips.tsx          Trips tab, trip details, itinerary form, travel card, trip mode, day panel trip items
     MoneyView.tsx      Money tab: checking balances, savings challenge, paycheck, spending
     PhoneShell.tsx     phone layout: greeting bar, bottom tabs, + button
     PhoneHome.tsx      phone Home: balances, savings, next 3 days, 3-day journal
@@ -36,6 +37,7 @@ src/
     JournalSearch.tsx  header search across journal text and tags
   lib/
     journal.ts         journal reads/writes, tags, search
+    trips.ts           trips, travelers, itinerary items, standby flow, packing, passports
     money.ts           what's due each day, paydays, balances, savings, spending
     plans.ts           to-dos and events, repeating to-dos
     useIsPhone.ts      switches to the phone layout under 768px wide
@@ -55,5 +57,5 @@ supabase/
 4. ✅ Money: balances (estimated since last update), paycheck split, savings challenge, purchase log (+ Log), auto-logged subscriptions
 5. ✅ Phone layout: Home (balances, savings, next 3 days, 3-day journal), month calendar, bottom tabs with +
 6. ✅ To-dos (anytime, dated, late roll forward, repeating) and calendar events; + Add: Purchase | To-do | Event
-7. Trips: itinerary, standby / award certificate flights, travelers, packing, passports
+7. ✅ Trips: itinerary (flights, hotel, car, drives, food, events), standby / award certificate flights with backups, who's on each flight, packing, passports, budget; trips on the week, month, day panels and phone Home (travel card + trip mode)
 8. Later: alerts, "ask it" (can I afford this?), confirmation-email import

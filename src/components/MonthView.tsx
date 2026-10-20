@@ -7,6 +7,7 @@ import DayBills from './DayBills'
 import { eventsOn, todosOn, type Plans } from '../lib/plans'
 import JournalEditor from './JournalEditor'
 import { ChevronIcon } from './icons'
+import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 
 interface Props {
   userId: string
@@ -17,10 +18,11 @@ interface Props {
   reloadMoney: () => Promise<void>
   dayExtra?: (date: string, showAdd?: boolean) => ReactNode
   plans?: Plans
+  trips?: TripsData
 }
 
 /** Full month (Monday first) with dots for what's on each day; tap a day to open it below. */
-export default function MonthView({ userId, today, selected, onSelect, money: m, reloadMoney, dayExtra, plans }: Props) {
+export default function MonthView({ userId, today, selected, onSelect, money: m, reloadMoney, dayExtra, plans, trips }: Props) {
   const sel = dateOf(selected)
   const year = sel.getFullYear(), month = sel.getMonth()
   const first = keyOf(new Date(year, month, 1))
@@ -77,7 +79,10 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
             const entry = journal.find((e) => e.entry_date === k)
             const late = ob.some((o) => o.status === 'overdue')
             const planDots = plans ? [...eventsOn(plans, k).map(() => 'var(--accent-hi)'), ...todosOn(plans, k, today).filter((t) => !t.done_at).map(() => 'var(--accent)')] : []
+            const away = trips ? tripsOn(trips, k).length > 0 : false
+            const tripDots = trips ? itemsOn(trips, k).slice(0, 1).map(() => '#8B3DFF') : []
             const dots = [
+              ...tripDots,
               ...planDots,
               ...(save && !save.deposit ? ['var(--pay)'] : []),
               ...ob.filter((o) => o.status !== 'paid').slice(0, 3).map((o) => (o.kind === 'sub' ? 'var(--muted)' : o.color)),
@@ -85,8 +90,9 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
             const isSel = k === selected, isToday = k === today
             return (
               <button key={k} type="button" onClick={() => onSelect(k)} aria-pressed={isSel}
-                aria-label={`${DAYS[dateOf(k).getDay()]}, ${MONTHS[month]} ${d}${pay ? ', payday' : ''}${ob.length ? `, ${ob.length} due` : ''}${late ? ', overdue' : ''}`}
-                className={`h-14 rounded-xl flex flex-col items-center justify-center gap-0.5 p-0 cursor-pointer border text-fg ${isSel ? 'bg-accent text-accent-ink border-accent' : pay ? 'bg-pay-soft border-pay text-pay-ink' : late ? 'bg-surface-2 border-bad' : isToday ? 'bg-surface-2 border-2 border-accent-hi' : 'bg-surface-2 border-transparent'}`}>
+                aria-label={`${DAYS[dateOf(k).getDay()]}, ${MONTHS[month]} ${d}${pay ? ', payday' : ''}${away ? ', on a trip' : ''}${ob.length ? `, ${ob.length} due` : ''}${late ? ', overdue' : ''}`}
+                className={`relative h-14 rounded-xl flex flex-col items-center justify-center gap-0.5 p-0 cursor-pointer border text-fg overflow-hidden ${isSel ? 'bg-accent text-accent-ink border-accent' : pay ? 'bg-pay-soft border-pay text-pay-ink' : late ? 'bg-surface-2 border-bad' : isToday ? 'bg-surface-2 border-2 border-accent-hi' : away ? 'bg-accent-soft border-transparent' : 'bg-surface-2 border-transparent'}`}>
+                {away && <span aria-hidden="true" className="absolute left-0 right-0 top-0 h-1 bg-accent-hi" />}
                 <span className="text-[15px] font-bold leading-none tnum">{d}</span>
                 <span className="text-[11px] leading-none min-h-3">{entry?.mood ? MOOD_EMOJI[entry.mood] : pay ? '$' : ''}</span>
                 <span className="flex gap-0.5 min-h-1.5">{dots.map((c, j) => <i key={j} className="size-1.5 rounded-full" style={{ background: c }} />)}</span>
@@ -94,7 +100,7 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
             )
           })}
         </div>
-        <p className="m-0 text-xs text-muted">Green = payday · dots = plans, to-dos, bills, auto-pay and savings · emoji = your mood</p>
+        <p className="m-0 text-xs text-muted">Green = payday · purple bar = on a trip · dots = trips, plans, to-dos, bills, auto-pay and savings · emoji = mood</p>
       </section>
 
       <section aria-label="Selected day" className="rounded-2xl border border-line bg-surface p-3.5 flex flex-col gap-3">

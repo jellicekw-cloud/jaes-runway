@@ -35,3 +35,27 @@ export const PlaneIcon = ({ size = 24 }: { size?: number }) => (
 export const ChevronIcon = ({ dir }: { dir: 'left' | 'right' }) => (
   <svg width="18" height="18" viewBox="0 0 24 24" {...base} strokeWidth={2.4}><path d={dir === 'left' ? 'M15 18l-6-6 6-6' : 'M9 18l6-6-6-6'} /></svg>
 )
+export const BedIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><path d="M2 20V8M22 20v-6a3 3 0 0 0-3-3H10v6M2 17h20" /><circle cx="6" cy="12" r="2" /></svg>
+)
+export const CarIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><path d="M5 17h14M5 17v2M19 17v2M3 13l2-6a2 2 0 0 1 2-1.4h10A2 2 0 0 1 19 7l2 6v4H3z" /><circle cx="7.5" cy="14" r="1" /><circle cx="16.5" cy="14" r="1" /></svg>
+)
+export const RoadIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><path d="M8 3L4 21M16 3l4 18M12 4v3M12 11v2M12 17v3" /></svg>
+)
+export const FoodIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><path d="M7 2v8a2 2 0 0 0 2 2v10M5 2v6M9 2v6M17 22V2c-2 1.5-3 4-3 7s1 4 3 4" /></svg>
+)
+export const TicketIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><path d="M3 9V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6z" /><path d="M14 5v14" strokeDasharray="2 2" /></svg>
+)
+export const PinIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><path d="M12 21s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z" /><circle cx="12" cy="9" r="2.5" /></svg>
+)
+export const SuitcaseIcon = ({ size = 24 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}><rect x="4" y="7" width="16" height="13" rx="2" /><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M8 20v1M16 20v1" /></svg>
+)
+export const GlobeIcon = ({ size = 20 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base} strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>
+)

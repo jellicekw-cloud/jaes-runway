@@ -9,6 +9,7 @@ import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
 import DayBills from './DayBills'
 import { eventsOn, todosOn, type Plans } from '../lib/plans'
 import { Eye, EyeOff } from './icons'
+import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 import JournalEditor from './JournalEditor'
 
 interface Props {
@@ -17,13 +18,16 @@ interface Props {
   money: MoneyData
   moneyLoaded: boolean
   reloadMoney: () => Promise<void>
-  extra?: ReactNode        // to-dos and travel cards plug in here
+  extra?: ReactNode        // to-dos card
+  top?: ReactNode          // trip mode while you're away
+  bottom?: ReactNode       // travel plans card
   plans: Plans
+  trips: TripsData
   dayExtra?: (date: string, showAdd?: boolean) => ReactNode
 }
 
 /** Phone Home: balances, savings challenge, next 3 days, 3-day journal. */
-export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, plans, dayExtra }: Props) {
+export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, top, bottom, plans, trips, dayExtra }: Props) {
   const days = [0, 1, 2].map((i) => addDays(today, i))
   const [journal, setJournal] = useState<JournalEntry[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -60,6 +64,8 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
 
   return (
     <div className="flex flex-col gap-3.5">
+      {top}
+
       {/* Balances */}
       <section aria-label="Checking balances" className="rounded-3xl p-4 text-white flex flex-col gap-3"
         style={{ background: 'linear-gradient(160deg, var(--accent) 0%, var(--header-2) 100%)' }}>
@@ -116,7 +122,7 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
         {days.map((k, i) => {
           const d = dateOf(k)
           const busy = isPayday(m, k) || Boolean(savingsOn(m, k)) || obligationsOn(m, k, today).length > 0
-          const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0
+          const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0 || itemsOn(trips, k).length > 0 || tripsOn(trips, k).length > 0
           return (
             <div key={k} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2.5">
               <div className="flex flex-col items-center pt-1">
@@ -161,6 +167,8 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
           )
         })}
       </section>
+
+      {bottom}
     </div>
   )
 }

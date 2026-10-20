@@ -3,40 +3,48 @@ import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, dateOf } from '../lib/dates'
 import type { MoneyData } from '../lib/money'
 import type { Plans } from '../lib/plans'
+import type { TripsData } from '../lib/trips'
 import PhoneHome from './PhoneHome'
 import MonthView from './MonthView'
 import BillsView from './BillsView'
 import MoneyView from './MoneyView'
 import JournalSearch from './JournalSearch'
-import { CalendarIcon, CardIcon, HomeIcon, Plus, Search, SignOut, WalletIcon } from './icons'
+import { CalendarIcon, HomeIcon, PlaneIcon, Plus, Search, SignOut, WalletIcon } from './icons'
 
-export type PhoneTab = 'home' | 'calendar' | 'bills' | 'money'
+export type PhoneTab = 'home' | 'calendar' | 'trips' | 'money'
 
 interface Props {
   userId: string
   today: string
+  tab: PhoneTab
+  onTab: (t: PhoneTab) => void
   money: MoneyData
   moneyLoaded: boolean
   moneyError: string
   reloadMoney: () => Promise<void>
   onLog: () => void
-  homeExtra?: ReactNode
+  homeExtra?: ReactNode     // to-dos card
+  homeTop?: ReactNode       // trip mode while you're away
+  homeBottom?: ReactNode    // travel plans card
   dayExtra?: (date: string, showAdd?: boolean) => ReactNode
   plans: Plans
+  trips: TripsData
+  tripsView: ReactNode
 }
 
 /** Phone layout: greeting bar on top, one screen at a time, tab bar with the + button at the bottom. */
-export default function PhoneShell({ userId, today, money, moneyLoaded, moneyError, reloadMoney, onLog, homeExtra, dayExtra, plans }: Props) {
-  const [tab, setTab] = useState<PhoneTab>('home')
+export default function PhoneShell(p: Props) {
+  const { userId, today, tab, onTab, money, moneyLoaded, moneyError, reloadMoney, onLog } = p
   const [selected, setSelected] = useState(today)
   const [searching, setSearching] = useState(false)
+  const [moneyPart, setMoneyPart] = useState<'bills' | 'balances'>('bills')
 
   const t = dateOf(today)
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
   function go(next: PhoneTab) {
-    setTab(next)
+    onTab(next)
     window.scrollTo({ top: 0 })
   }
 
@@ -70,10 +78,30 @@ export default function PhoneShell({ userId, today, money, moneyLoaded, moneyErr
       )}
 
       <main className="flex-1 safe-x pt-3.5 flex flex-col" style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}>
-        {tab === 'home' && <PhoneHome userId={userId} today={today} money={money} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney} extra={homeExtra} plans={plans} dayExtra={dayExtra} />}
-        {tab === 'calendar' && <MonthView userId={userId} today={today} selected={selected} onSelect={setSelected} money={money} reloadMoney={reloadMoney} dayExtra={dayExtra} plans={plans} />}
-        {tab === 'bills' && <div className="-mx-4"><BillsView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={(d) => { setSelected(d); go('calendar') }} /></div>}
-        {tab === 'money' && <div className="-mx-4"><MoneyView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={onLog} /></div>}
+        {tab === 'home' && (
+          <PhoneHome userId={userId} today={today} money={money} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
+            extra={p.homeExtra} top={p.homeTop} bottom={p.homeBottom} plans={p.plans} trips={p.trips} dayExtra={p.dayExtra} />
+        )}
+        {tab === 'calendar' && (
+          <MonthView userId={userId} today={today} selected={selected} onSelect={setSelected} money={money} reloadMoney={reloadMoney}
+            dayExtra={p.dayExtra} plans={p.plans} trips={p.trips} />
+        )}
+        {tab === 'trips' && <div className="-mx-4">{p.tripsView}</div>}
+        {tab === 'money' && (
+          <>
+            <div role="tablist" aria-label="Money" className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 border border-line p-1">
+              {([['bills', 'Bills'], ['balances', 'Balances & savings']] as const).map(([k, l]) => (
+                <button key={k} type="button" role="tab" aria-selected={moneyPart === k} onClick={() => setMoneyPart(k)}
+                  className={`h-10 rounded-lg border-0 font-bold cursor-pointer ${moneyPart === k ? 'bg-accent text-accent-ink' : 'bg-transparent text-muted'}`}>{l}</button>
+              ))}
+            </div>
+            <div className="-mx-4">
+              {moneyPart === 'bills'
+                ? <BillsView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={(d) => { setSelected(d); go('calendar') }} />
+                : <MoneyView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={onLog} />}
+            </div>
+          </>
+        )}
       </main>
 
       <nav aria-label="Screens" className="fixed left-0 right-0 bottom-0 z-20 grid grid-cols-[1fr_1fr_76px_1fr_1fr] items-center border-t border-line bg-surface px-1.5 pt-1.5"
@@ -84,7 +112,7 @@ export default function PhoneShell({ userId, today, money, moneyLoaded, moneyErr
           className="justify-self-center -mt-7 size-[62px] rounded-full border-4 border-surface bg-accent-hi text-white grid place-items-center cursor-pointer shadow-[0_8px_18px_rgba(109,40,217,.4)]">
           <Plus />
         </button>
-        <TabButton label="Bills" active={tab === 'bills'} onClick={() => go('bills')}><CardIcon /></TabButton>
+        <TabButton label="Trips" active={tab === 'trips'} onClick={() => go('trips')}><PlaneIcon /></TabButton>
         <TabButton label="Money" active={tab === 'money'} onClick={() => go('money')}><WalletIcon /></TabButton>
       </nav>
     </div>
