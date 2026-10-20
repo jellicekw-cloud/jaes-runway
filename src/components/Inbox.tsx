@@ -1,0 +1,569 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { money, shortDate } from '../lib/dates'
+import { installmentAmount, type MoneyData } from '../lib/money'
+import { timeLabel } from '../lib/plans'
+import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
+import {
+  ORDER_STATUS_LABEL, addFromEmail, handled, markDelivered, needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, removeOrder,
+  rereadEmail, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
+  type AfterpayInfo, type AppointmentInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
+  type Suggestion, type TripItemInfo,
+} from '../lib/inbox'
+
+type Reload = () => Promise<void>
+
+// ---------------------------------------------------------------------------
+// Small pieces
+// ---------------------------------------------------------------------------
+
+const inputCls = 'h-10 w-full min-w-0 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi'
+const btn = 'h-10 px-4 rounded-xl font-bold cursor-pointer'
+const btnMain = `${btn} border-0 bg-accent text-accent-ink`
+const btnPlain = `${btn} border border-line bg-surface text-fg`
+const heading = 'm-0 text-xs font-bold tracking-widest uppercase text-muted'
+
+function F({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <label className={`flex flex-col gap-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>
+      <span className="text-[11px] font-bold tracking-wider uppercase text-muted">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', gmail_confirm: '✉', other: '✉' }
+const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item' }
+
+const blankOrder = (store: string | null = null): OrderInfo => ({
+  store, order_number: null, items: null, total: null, ordered_on: null, status: 'ordered', carrier: null, tracking_number: null,
+  expected_on: null, delivered_on: null, delivered_time: null, paid_with_afterpay: false,
+})
+const blankAfterpay = (store: string | null = null): AfterpayInfo => ({ store, total: null, purchased_on: null, first_payment_on: null, order_number: null })
+const blankAppt = (title: string | null = null): AppointmentInfo => ({ title, date: null, start_time: null, end_time: null, location: null, notes: null })
+const blankTrip = (title: string | null = null): TripItemInfo => ({
+  trip_id: null, kind: null, title, date: null, time: null, end_date: null, end_time: null, confirmation: null, airline: null,
+  flight_number: null, origin: null, destination: null, details: null, cost: null,
+})
+
+const toNum = (v: string) => {
+  const n = Number(v.replace(/[$,\s]/g, ''))
+  return v.trim() && Number.isFinite(n) ? Math.round(n * 100) / 100 : null
+}
+const orNull = (v: string) => (v.trim() ? v : null)
+
+function apLine(total: number | null | undefined, purchased: string | null | undefined, first: string | null | undefined): string {
+  if (!total) return 'Afterpay · add the total'
+  const each = money(installmentAmount({ total, installments: 4 }, 1))
+  const firstText = !first || (purchased && first <= purchased) ? '1st paid at checkout' : `1st payment ${shortDate(first)}`
+  return `Afterpay · 4 × ${each} · ${firstText}`
+}
+
+function sender(e: InboxEmail) {
+  return e.from_name || e.from_address || (e.source === 'paste' ? 'Pasted email' : 'Email')
+}
+
+// ---------------------------------------------------------------------------
+// Packages
+// ---------------------------------------------------------------------------
+
+const TONE_TEXT = { done: 'text-pay-ink', late: 'text-bad', delayed: 'text-warn', go: 'text-pkg-ink' } as const
+
+export function OrderRow({ o, today, reload, compact }: { o: Order; today: string; reload: Reload; compact?: boolean }) {
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const tone = packageTone(o, today)
+  async function run(f: () => Promise<void>) {
+    setBusy(true)
+    try { await f(); await reload() } catch { /* row stays; next reload shows the truth */ }
+    setBusy(false)
+  }
+  return (
+    <div className="flex items-center gap-2.5 py-2 border-t border-line first:border-t-0 min-w-0">
+      <span aria-hidden="true" className="text-lg shrink-0">{tone === 'done' ? '✅' : '📦'}</span>
+      <span className="flex-1 min-w-0">
+        <b className="block truncate">{o.store}{o.items ? <span className="font-normal text-muted"> · {o.items}</span> : null}</b>
+        <span className={`block text-sm font-bold ${TONE_TEXT[tone]}`}>{statusLine(o, today)}</span>
+        {!compact && o.tracking_number && <span className="block text-xs text-muted truncate">Tracking {o.carrier ? `${o.carrier} ` : ''}{o.tracking_number}</span>}
+      </span>
+      {o.status !== 'delivered' && (
+        <button type="button" disabled={busy} onClick={() => void run(() => markDelivered(o, today))}
+          className="h-9 px-3 rounded-lg border border-pkg bg-surface text-pkg-ink text-sm font-bold cursor-pointer shrink-0">Got it</button>
+      )}
+      {!compact && (
+        confirm
+          ? <button type="button" disabled={busy} onClick={() => void run(() => removeOrder(o.id))}
+              className="h-9 px-3 rounded-lg border-0 bg-bad text-white text-sm font-bold cursor-pointer shrink-0">Remove?</button>
+          : <button type="button" aria-label={`Remove ${o.store}`} onClick={() => setConfirm(true)}
+              className="size-9 rounded-lg border border-line bg-transparent text-muted cursor-pointer shrink-0">×</button>
+      )}
+    </div>
+  )
+}
+
+/** Phone Home: only on days something is coming (or came, or got delayed). */
+export function ArrivingToday({ orders, today, reload, onOpen }: { orders: Order[]; today: string; reload: Reload; onOpen: () => void }) {
+  const list = packagesOn(orders, today, today)
+  if (list.length === 0) return null
+  return (
+    <section aria-label="Arriving today" className="rounded-2xl border-2 border-pkg bg-pkg-soft p-4 flex flex-col gap-1">
+      <div className="flex items-center justify-between">
+        <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-pkg-ink">📦 Arriving today · {list.length}</h2>
+        <button type="button" onClick={onOpen} className="bg-transparent border-0 text-pkg-ink text-sm font-bold underline cursor-pointer">All packages</button>
+      </div>
+      {list.map((o) => <OrderRow key={o.id} o={o} today={today} reload={reload} compact />)}
+    </section>
+  )
+}
+
+/** Phone Home: the way into the Inbox. Hidden when there's nothing to review and nothing coming. */
+export function InboxHomeCard({ data, today, onOpen }: { data: InboxData; today: string; onOpen: () => void }) {
+  const waiting = waitingCount(data)
+  const coming = onTheWay(data.orders, today).filter((o) => o.status !== 'delivered').length
+  if (waiting > 0) {
+    const kinds = [...toReview(data), ...notSure(data)].map((e) => (e.status === 'review' ? (e.kind === 'gmail_confirm' ? 'Gmail code' : KIND_NAME[e.kind as CardKind] ?? 'Email') : 'not sure'))
+    const uniq = [...new Set(kinds)].join(', ')
+    return (
+      <button type="button" onClick={onOpen}
+        className="w-full rounded-2xl border-2 border-accent-hi bg-surface p-4 flex items-center gap-3 text-left text-fg cursor-pointer">
+        <span aria-hidden="true" className="text-2xl">✉</span>
+        <span className="flex-1 min-w-0">
+          <b className="block text-lg">Inbox</b>
+          <span className="block text-sm text-muted truncate">{uniq}</span>
+        </span>
+        <span className="rounded-full bg-accent text-accent-ink px-3 py-1 text-sm font-bold whitespace-nowrap">{waiting} to review</span>
+      </button>
+    )
+  }
+  if (coming > 0) {
+    return (
+      <button type="button" onClick={onOpen}
+        className="w-full rounded-xl border border-line bg-surface px-4 py-2.5 flex items-center gap-2 text-left text-fg cursor-pointer">
+        <span aria-hidden="true">📦</span>
+        <span className="flex-1 font-bold">{coming} package{coming === 1 ? '' : 's'} on the way</span>
+        <span aria-hidden="true" className="text-muted">›</span>
+      </button>
+    )
+  }
+  return null
+}
+
+/** Packages on a calendar day (the open day under the week, or the day under the month). */
+export function DayPackages({ date, today, orders, reload }: { date: string; today: string; orders: Order[]; reload: Reload }) {
+  const list = packagesOn(orders, date, today)
+  if (list.length === 0) return null
+  return (
+    <div className="rounded-xl border border-pkg/50 bg-pkg-soft/60 px-3">
+      {list.map((o) => <OrderRow key={o.id} o={o} today={today} reload={reload} compact />)}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// One email waiting for you
+// ---------------------------------------------------------------------------
+
+function initialKind(e: InboxEmail): CardKind | null {
+  if (e.kind === 'order' || e.kind === 'shipping') return e.suggestion.order ? 'order' : null
+  if (e.kind === 'afterpay') return e.suggestion.afterpay ? 'afterpay' : null
+  if (e.kind === 'appointment') return e.suggestion.appointment ? 'appointment' : null
+  if (e.kind === 'trip') return e.suggestion.trip_item ? 'trip' : null
+  return null
+}
+
+function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail): Suggestion {
+  const who = e.from_name ?? null
+  if (kind === 'order') {
+    const order = { ...blankOrder(who), ...(s.order ?? {}) }
+    const afterpay = order.paid_with_afterpay || s.afterpay ? { ...blankAfterpay(order.store), ...(s.afterpay ?? {}) } : s.afterpay ?? null
+    if (s.afterpay) order.paid_with_afterpay = true
+    return { ...s, order, afterpay }
+  }
+  if (kind === 'afterpay') return { ...s, afterpay: { ...blankAfterpay(s.order?.store ?? who), total: s.order?.total ?? null, ...(s.afterpay ?? {}) } }
+  if (kind === 'appointment') return { ...s, appointment: { ...blankAppt(who), ...(s.appointment ?? {}) } }
+  return { ...s, trip_item: { ...blankTrip(e.subject), ...(s.trip_item ?? {}) } }
+}
+
+function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData): string[] {
+  if (kind === 'order' && s.order) {
+    const o = s.order
+    const lines = [[o.items, o.total !== null ? money(o.total) : null].filter(Boolean).join(' · ')]
+    lines.push(statusLine({ status: (o.status ?? 'ordered') as OrderStatus, carrier: o.carrier, expected_on: o.expected_on, delivered_on: o.delivered_on, delivered_time: o.delivered_time }, today))
+    if (o.paid_with_afterpay) {
+      const a = s.afterpay
+      lines.push(apLine(a?.total ?? o.total, a?.purchased_on ?? o.ordered_on ?? today, a?.first_payment_on ?? a?.purchased_on ?? o.ordered_on))
+    }
+    return lines.filter(Boolean)
+  }
+  if (kind === 'afterpay' && s.afterpay) {
+    const a = s.afterpay
+    const lines = [`${a.total ? money(a.total) : 'No total yet'}${a.purchased_on ? ` · bought ${shortDate(a.purchased_on)}` : ''}`, apLine(a.total, a.purchased_on ?? today, a.first_payment_on)]
+    const linked = s.link_order_id ? data.orders.find((o) => o.id === s.link_order_id) : undefined
+    if (linked) lines.push(`Links to your ${linked.store} order`)
+    return lines
+  }
+  if (kind === 'appointment' && s.appointment) {
+    const a = s.appointment
+    return [
+      [a.date ? shortDate(a.date) : 'No date', a.start_time ? timeLabel(a.start_time) : null].filter(Boolean).join(' · '),
+      a.location ?? '',
+    ].filter(Boolean)
+  }
+  if (kind === 'trip' && s.trip_item) {
+    const t = s.trip_item
+    const trip = trips.trips.find((x) => x.id === t.trip_id)
+    return [
+      `${t.kind ? KIND_LABEL[t.kind] : 'Item'} · ${t.date ? shortDate(t.date) : 'no date'}${t.time ? ` ${timeLabel(t.time)}` : ''}${t.end_date ? ` → ${shortDate(t.end_date)}` : ''}`,
+      t.confirmation ? `Confirmation ${t.confirmation}` : '',
+      trip ? `Goes in: ${trip.name}` : '',
+    ].filter(Boolean)
+  }
+  return []
+}
+
+function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
+  e: InboxEmail; today: string; data: InboxData; money: MoneyData; trips: TripsData; onAdded: (line: string, kind: CardKind) => Promise<void>; reload: Reload
+}) {
+  const unsure = e.status !== 'review'
+  const [kind, setKind] = useState<CardKind | null>(unsure ? null : initialKind(e))
+  const [draft, setDraft] = useState<Suggestion>(() => (kind ? withDefaults(kind, e.suggestion, e) : e.suggestion))
+  const [editing, setEditing] = useState(false)
+  const [showBody, setShowBody] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  function choose(k: CardKind) {
+    setKind(k); setDraft(withDefaults(k, e.suggestion, e)); setEditing(true); setError('')
+  }
+
+  async function add() {
+    if (!kind) return
+    const problem = needsFixing(kind, draft, trips.trips)
+    if (problem) { setError(problem); setEditing(true); return }
+    setBusy(true); setError('')
+    try {
+      const line = await addFromEmail(e, kind, draft, m, today)
+      await onAdded(line, kind)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Couldn\'t add it')
+      setBusy(false)
+    }
+  }
+
+  async function act(f: () => Promise<unknown>) {
+    setBusy(true); setError('')
+    try { await f(); await reload() } catch (err) { setError(err instanceof Error ? err.message : 'Something went wrong'); setBusy(false) }
+  }
+
+  const title = e.kind === 'gmail_confirm' ? 'Gmail forwarding code'
+    : kind === 'order' ? `Order · ${draft.order?.store ?? sender(e)}${draft.order?.paid_with_afterpay ? ' + Afterpay' : ''}`
+      : kind === 'afterpay' ? `Afterpay · ${draft.afterpay?.store ?? sender(e)}`
+        : kind === 'appointment' ? `Appointment · ${draft.appointment?.title ?? sender(e)}`
+          : kind === 'trip' ? `Trip · ${draft.trip_item?.title ?? sender(e)}`
+            : e.subject || sender(e)
+  const icon = KIND_ICON[e.kind === 'gmail_confirm' ? 'gmail_confirm' : kind ?? e.kind ?? 'other'] ?? '✉'
+
+  return (
+    <article className={`rounded-2xl border bg-surface p-3.5 flex flex-col gap-2 ${unsure ? 'border-warn/60' : 'border-line'}`}>
+      <div className="flex items-start gap-2.5">
+        <span aria-hidden="true" className="text-xl leading-7 shrink-0">{icon}</span>
+        <div className="flex-1 min-w-0">
+          <b className="block leading-snug">{title}</b>
+          <span className="block text-xs text-muted truncate">{sender(e)}{e.subject && title !== e.subject ? ` · ${e.subject}` : ''}</span>
+        </div>
+      </div>
+
+      {/* Gmail's confirmation email: show the code, nothing to add */}
+      {e.kind === 'gmail_confirm' ? (
+        <>
+          <p className="m-0 text-sm">Gmail sent this when you added Runway as a forwarding address. Use the code in Gmail, or open the link.</p>
+          {e.suggestion.code && (
+            <div className="flex items-center gap-2">
+              <code className="text-2xl font-bold tracking-widest tnum">{e.suggestion.code}</code>
+              <button type="button" className={btnPlain} onClick={() => { void navigator.clipboard?.writeText(e.suggestion.code ?? ''); setCopied(true) }}>{copied ? 'Copied' : 'Copy'}</button>
+            </div>
+          )}
+          {e.suggestion.link && <a href={e.suggestion.link} target="_blank" rel="noreferrer" className="text-accent font-bold text-sm break-all">Open the confirmation link</a>}
+          <div className="flex gap-2"><button type="button" disabled={busy} className={btnMain} onClick={() => void act(() => setEmailStatus(e.id, 'added'))}>Done</button></div>
+        </>
+      ) : (
+        <>
+          {e.status === 'error' ? (
+            <p className="m-0 text-sm font-bold text-bad">Couldn't read this one{e.error ? `: ${e.error}` : '.'}</p>
+          ) : (e.summary && unsure && !kind) ? <p className="m-0 text-sm">{e.summary}</p> : null}
+
+          {kind && !editing && (
+            <ul className="m-0 p-0 list-none text-sm flex flex-col gap-0.5">
+              {describe(kind, draft, today, data, trips).map((l, i) => <li key={i} className={i === 0 ? '' : 'text-muted'}>{l}</li>)}
+            </ul>
+          )}
+
+          {unsure && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-bold tracking-wider uppercase text-muted">{kind ? 'Adding it as' : 'What is it?'}</span>
+              <div className="flex flex-wrap gap-1.5">
+                {(['order', 'afterpay', 'appointment', 'trip'] as CardKind[]).map((k) => (
+                  <button key={k} type="button" aria-pressed={kind === k} onClick={() => choose(k)}
+                    className={`h-9 px-3 rounded-full text-sm font-bold cursor-pointer border ${kind === k ? 'bg-accent text-accent-ink border-accent' : 'bg-surface-2 text-fg border-line'}`}>
+                    {KIND_NAME[k]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {kind && editing && <EditForm kind={kind} draft={draft} setDraft={setDraft} trips={trips} today={today} />}
+
+          {error && <p role="alert" className="m-0 text-sm font-bold text-bad">{error}</p>}
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {kind && <button type="button" disabled={busy} className={btnMain} onClick={() => void add()}>{busy ? 'Adding…' : 'Add'}</button>}
+            {kind && !editing && <button type="button" className={btnPlain} onClick={() => setEditing(true)}>Edit</button>}
+            {kind && editing && !unsure && <button type="button" className={btnPlain} onClick={() => setEditing(false)}>Done editing</button>}
+            {e.status === 'error' && <button type="button" disabled={busy} className={btnPlain} onClick={() => void act(() => rereadEmail(e.id))}>{busy ? 'Reading…' : 'Try again'}</button>}
+            <button type="button" disabled={busy} className={btnPlain} onClick={() => void act(() => setEmailStatus(e.id, 'skipped'))}>Skip</button>
+            <button type="button" aria-expanded={showBody} onClick={() => setShowBody(!showBody)}
+              className="ml-auto bg-transparent border-0 text-accent text-sm font-bold cursor-pointer">{showBody ? 'Hide email' : 'Show email'}</button>
+          </div>
+          {showBody && (
+            <pre className="m-0 max-h-72 overflow-auto rounded-xl bg-surface-2 border border-line p-3 text-xs whitespace-pre-wrap break-words font-[inherit]">{e.body || '(empty)'}</pre>
+          )}
+        </>
+      )}
+    </article>
+  )
+}
+
+function EditForm({ kind, draft, setDraft, trips, today }: {
+  kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string
+}) {
+  if (kind === 'order') {
+    const o = draft.order ?? blankOrder()
+    const a = draft.afterpay ?? blankAfterpay(o.store)
+    const set = (p: Partial<OrderInfo>) => setDraft((d) => ({ ...d, order: { ...(d.order ?? blankOrder()), ...p } }))
+    const setA = (p: Partial<AfterpayInfo>) => setDraft((d) => ({ ...d, afterpay: { ...(d.afterpay ?? blankAfterpay(d.order?.store ?? null)), ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="Store"><input className={inputCls} value={o.store ?? ''} onChange={(ev) => set({ store: orNull(ev.target.value) })} /></F>
+        <F label="Total"><input className={inputCls} inputMode="decimal" defaultValue={o.total ?? ''} onChange={(ev) => set({ total: toNum(ev.target.value) })} /></F>
+        <F label="What's in it" wide><input className={inputCls} value={o.items ?? ''} onChange={(ev) => set({ items: orNull(ev.target.value) })} /></F>
+        <F label="Status">
+          <select className={inputCls} value={o.status ?? 'ordered'} onChange={(ev) => set({ status: ev.target.value as OrderStatus })}>
+            {(['ordered', 'shipped', 'out_for_delivery', 'delayed', 'delivered'] as OrderStatus[]).map((s) => <option key={s} value={s}>{ORDER_STATUS_LABEL[s]}</option>)}
+          </select>
+        </F>
+        <F label="Arriving"><input type="date" className={inputCls} value={o.expected_on ?? ''} onChange={(ev) => set({ expected_on: orNull(ev.target.value) })} /></F>
+        <F label="Order #"><input className={inputCls} value={o.order_number ?? ''} onChange={(ev) => set({ order_number: orNull(ev.target.value) })} /></F>
+        <F label="Tracking #"><input className={inputCls} value={o.tracking_number ?? ''} onChange={(ev) => set({ tracking_number: orNull(ev.target.value) })} /></F>
+        <label className="col-span-2 flex items-center gap-2 font-bold text-sm">
+          <input type="checkbox" className="size-5 accent-[var(--accent)]" checked={o.paid_with_afterpay}
+            onChange={(ev) => { set({ paid_with_afterpay: ev.target.checked }); if (ev.target.checked && !draft.afterpay) setA({ store: o.store, total: o.total, purchased_on: o.ordered_on ?? today }) }} />
+          Paid with Afterpay
+        </label>
+        {o.paid_with_afterpay && (
+          <>
+            <F label="Bought on"><input type="date" className={inputCls} value={a.purchased_on ?? o.ordered_on ?? today} onChange={(ev) => setA({ purchased_on: orNull(ev.target.value) })} /></F>
+            <F label="1st payment"><input type="date" className={inputCls} value={a.first_payment_on ?? a.purchased_on ?? o.ordered_on ?? today} onChange={(ev) => setA({ first_payment_on: orNull(ev.target.value) })} /></F>
+          </>
+        )}
+      </div>
+    )
+  }
+  if (kind === 'afterpay') {
+    const a = draft.afterpay ?? blankAfterpay()
+    const set = (p: Partial<AfterpayInfo>) => setDraft((d) => ({ ...d, afterpay: { ...(d.afterpay ?? blankAfterpay()), ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="Store"><input className={inputCls} value={a.store ?? ''} onChange={(ev) => set({ store: orNull(ev.target.value) })} /></F>
+        <F label="Total"><input className={inputCls} inputMode="decimal" defaultValue={a.total ?? ''} onChange={(ev) => set({ total: toNum(ev.target.value) })} /></F>
+        <F label="Bought on"><input type="date" className={inputCls} value={a.purchased_on ?? today} onChange={(ev) => set({ purchased_on: orNull(ev.target.value) })} /></F>
+        <F label="1st payment"><input type="date" className={inputCls} value={a.first_payment_on ?? a.purchased_on ?? today} onChange={(ev) => set({ first_payment_on: orNull(ev.target.value) })} /></F>
+        <p className="col-span-2 m-0 text-xs text-muted">Same day as bought = paid at checkout. A later day = you skipped or pushed the first payment.</p>
+      </div>
+    )
+  }
+  if (kind === 'appointment') {
+    const a = draft.appointment ?? blankAppt()
+    const set = (p: Partial<AppointmentInfo>) => setDraft((d) => ({ ...d, appointment: { ...(d.appointment ?? blankAppt()), ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="What" wide><input className={inputCls} value={a.title ?? ''} onChange={(ev) => set({ title: orNull(ev.target.value) })} /></F>
+        <F label="Date"><input type="date" className={inputCls} value={a.date ?? ''} onChange={(ev) => set({ date: orNull(ev.target.value) })} /></F>
+        <F label="Time"><input type="time" className={inputCls} value={a.start_time ?? ''} onChange={(ev) => set({ start_time: orNull(ev.target.value) })} /></F>
+        <F label="Where" wide><input className={inputCls} value={a.location ?? ''} onChange={(ev) => set({ location: orNull(ev.target.value) })} /></F>
+      </div>
+    )
+  }
+  const t = draft.trip_item ?? blankTrip()
+  const set = (p: Partial<TripItemInfo>) => setDraft((d) => ({ ...d, trip_item: { ...(d.trip_item ?? blankTrip()), ...p } }))
+  const list = trips.trips.filter((x) => x.status !== 'done' || x.id === t.trip_id)
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <F label="Trip" wide>
+        <select className={inputCls} value={t.trip_id ?? (t.new_trip_name !== undefined && t.new_trip_name !== null ? '__new' : '')}
+          onChange={(ev) => (ev.target.value === '__new' ? set({ trip_id: null, new_trip_name: t.destination ?? '' }) : set({ trip_id: ev.target.value || null, new_trip_name: null }))}>
+          <option value="">Pick a trip…</option>
+          {list.map((x) => <option key={x.id} value={x.id}>{x.name}{x.start_date ? ` · ${shortDate(x.start_date)}` : ''}</option>)}
+          <option value="__new">New trip…</option>
+        </select>
+      </F>
+      {!t.trip_id && t.new_trip_name !== undefined && t.new_trip_name !== null && (
+        <F label="New trip name" wide><input className={inputCls} value={t.new_trip_name} onChange={(ev) => set({ new_trip_name: ev.target.value })} /></F>
+      )}
+      <F label="Type">
+        <select className={inputCls} value={t.kind ?? 'other'} onChange={(ev) => set({ kind: ev.target.value as ItemKind })}>
+          {(Object.keys(KIND_LABEL) as ItemKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+        </select>
+      </F>
+      <F label="Name"><input className={inputCls} value={t.title ?? ''} onChange={(ev) => set({ title: orNull(ev.target.value) })} /></F>
+      <F label="Date"><input type="date" className={inputCls} value={t.date ?? ''} onChange={(ev) => set({ date: orNull(ev.target.value) })} /></F>
+      <F label="Time"><input type="time" className={inputCls} value={t.time ?? ''} onChange={(ev) => set({ time: orNull(ev.target.value) })} /></F>
+      <F label="Until"><input type="date" className={inputCls} value={t.end_date ?? ''} onChange={(ev) => set({ end_date: orNull(ev.target.value) })} /></F>
+      <F label="Confirmation"><input className={inputCls} value={t.confirmation ?? ''} onChange={(ev) => set({ confirmation: orNull(ev.target.value.toUpperCase()) })} /></F>
+      {t.kind === 'flight' && (
+        <>
+          <F label="Flight"><input className={inputCls} value={t.flight_number ?? ''} onChange={(ev) => set({ flight_number: orNull(ev.target.value) })} /></F>
+          <F label="Pass">
+            <select className={inputCls} value={t.pass_type ?? 'ticket'} onChange={(ev) => set({ pass_type: ev.target.value as PassType })}>
+              {(Object.keys(PASS_LABEL) as PassType[]).map((k) => <option key={k} value={k}>{PASS_LABEL[k]}</option>)}
+            </select>
+          </F>
+          <F label="From"><input className={inputCls} value={t.origin ?? ''} onChange={(ev) => set({ origin: orNull(ev.target.value.toUpperCase()) })} /></F>
+          <F label="To"><input className={inputCls} value={t.destination ?? ''} onChange={(ev) => set({ destination: orNull(ev.target.value.toUpperCase()) })} /></F>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The Inbox panel (side panel on desktop, full screen on phone)
+// ---------------------------------------------------------------------------
+
+interface PanelProps {
+  open: boolean
+  onClose: () => void
+  isPhone: boolean
+  focusPaste: boolean
+  today: string
+  data: InboxData
+  reload: Reload
+  money: MoneyData
+  trips: TripsData
+  onAdded: (line: string, kind: CardKind) => Promise<void>
+}
+
+export function InboxPanel({ open, onClose, isPhone, focusPaste, today, data, reload, money: m, trips, onAdded }: PanelProps) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const pasteRef = useRef<HTMLTextAreaElement>(null)
+  const [paste, setPaste] = useState('')
+  const [pasteBusy, setPasteBusy] = useState(false)
+  const [pasteMsg, setPasteMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  useEffect(() => {
+    const el = dialog.current
+    if (!el) return
+    if (open && !el.open) {
+      el.showModal()
+      setPasteMsg(null)
+      void reload()
+      if (focusPaste) requestAnimationFrame(() => { pasteRef.current?.scrollIntoView({ block: 'center' }); pasteRef.current?.focus() })
+    }
+    if (!open && el.open) el.close()
+  }, [open, focusPaste, reload])
+
+  async function readPaste() {
+    const text = paste.trim()
+    if (text.length < 20) { setPasteMsg({ ok: false, text: 'Paste the whole email, including the details.' }); return }
+    setPasteBusy(true); setPasteMsg(null)
+    try {
+      const r = await pasteEmail(text)
+      setPaste('')
+      setPasteMsg({ ok: r.status !== 'error', text: r.status === 'error' ? `Couldn't read it: ${r.error ?? ''}` : r.status === 'auto' ? `Done: ${r.summary}` : 'Read it. It\'s at the top of the Inbox.' })
+      await reload()
+    } catch (err) {
+      setPasteMsg({ ok: false, text: err instanceof Error ? err.message : 'Couldn\'t read it' })
+    }
+    setPasteBusy(false)
+  }
+
+  const review = toReview(data)
+  const unsure = notSure(data)
+  const reading = stillReading(data)
+  const coming = onTheWay(data.orders, today)
+  const done = handled(data)
+  const cardProps = { today, data, money: m, trips, onAdded, reload }
+
+  return (
+    <dialog ref={dialog} onClose={onClose} aria-labelledby="inbox-title"
+      className={`p-0 text-fg bg-bg border-line backdrop:bg-black/50 ${isPhone ? 'm-0 w-full max-w-full h-dvh max-h-dvh border-0' : 'm-0 ms-auto h-dvh max-h-dvh w-[480px] max-w-full border-l'}`}>
+      <div className="sticky top-0 z-10 bg-header text-white px-4 py-3 flex items-center gap-3" style={{ paddingTop: isPhone ? 'max(12px, env(safe-area-inset-top, 0px))' : undefined }}>
+        <h2 id="inbox-title" className="m-0 flex-1 text-2xl font-bold">Inbox</h2>
+        <button type="button" onClick={onClose} aria-label="Close inbox"
+          className="size-10 rounded-full border border-header-2 bg-transparent text-white grid place-items-center cursor-pointer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+
+      <div className="p-4 flex flex-col gap-5" style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}>
+        {reading.length > 0 && (
+          <p role="status" className="m-0 rounded-xl bg-accent-soft px-3 py-2 text-sm font-bold">
+            Reading {reading.length === 1 ? `“${reading[0].subject ?? 'an email'}”` : `${reading.length} emails`}…
+          </p>
+        )}
+
+        <section aria-label="To review" className="flex flex-col gap-2.5">
+          <h3 className={heading}>To review · {review.length}</h3>
+          {review.length === 0 && <p className="m-0 text-sm text-muted">Nothing waiting. New emails you forward show up here.</p>}
+          {review.map((e) => <ReviewCard key={e.id} e={e} {...cardProps} />)}
+        </section>
+
+        {unsure.length > 0 && (
+          <section aria-label="Not sure" className="flex flex-col gap-2.5">
+            <h3 className={heading}>Not sure, take a look · {unsure.length}</h3>
+            {unsure.map((e) => <ReviewCard key={e.id} e={e} {...cardProps} />)}
+          </section>
+        )}
+
+        <section aria-label="On the way" className="flex flex-col gap-1">
+          <h3 className={heading}>On the way · {coming.filter((o) => o.status !== 'delivered').length}</h3>
+          {coming.length === 0
+            ? <p className="m-0 text-sm text-muted">No packages right now.</p>
+            : <div className="rounded-2xl border border-line bg-surface px-3">{coming.map((o) => <OrderRow key={o.id} o={o} today={today} reload={reload} />)}</div>}
+        </section>
+
+        <section aria-label="Paste an email" className="flex flex-col gap-2">
+          <h3 className={heading}>Paste an email</h3>
+          <p className="m-0 text-sm text-muted">For one that bounced or didn't forward: open it, select all, copy, and paste it here.</p>
+          <textarea ref={pasteRef} value={paste} onChange={(ev) => setPaste(ev.target.value)} rows={5} aria-label="Pasted email"
+            placeholder="From: Amazon.com&#10;Subject: Your order…"
+            className="w-full rounded-xl border border-line bg-surface p-3 text-fg text-sm focus:outline-2 focus:outline-accent-hi" />
+          <div className="flex items-center gap-3">
+            <button type="button" disabled={pasteBusy} className={btnMain} onClick={() => void readPaste()}>{pasteBusy ? 'Reading…' : 'Read it'}</button>
+            {pasteMsg && <span role={pasteMsg.ok ? 'status' : 'alert'} className={`text-sm font-bold ${pasteMsg.ok ? 'text-pay-ink' : 'text-bad'}`}>{pasteMsg.text}</span>}
+          </div>
+        </section>
+
+        {done.length > 0 && (
+          <details className="rounded-2xl border border-line bg-surface px-3 py-2">
+            <summary className="cursor-pointer font-bold text-sm py-1">Handled this week · {done.length}</summary>
+            <ul className="m-0 p-0 list-none">
+              {done.map((e) => (
+                <li key={e.id} className="flex items-center gap-2 py-2 border-t border-line text-sm min-w-0">
+                  <span className="shrink-0 rounded-full bg-surface-2 border border-line px-2 py-0.5 text-xs font-bold">
+                    {e.status === 'auto' ? 'Updated' : e.status === 'merged' ? 'Combined' : e.status === 'added' ? 'Added' : 'Skipped'}
+                  </span>
+                  <span className="flex-1 min-w-0 truncate">{e.summary || e.subject || sender(e)}</span>
+                  {e.status === 'skipped' && (
+                    <button type="button" className="bg-transparent border-0 text-accent font-bold cursor-pointer text-sm shrink-0"
+                      onClick={() => void setEmailStatus(e.id, 'unsure').then(reload)}>Bring back</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+    </dialog>
+  )
+}

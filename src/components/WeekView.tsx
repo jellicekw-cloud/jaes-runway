@@ -8,6 +8,7 @@ import JournalEditor from './JournalEditor'
 import DayBills from './DayBills'
 import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 import { ItemIcon } from './Trips'
+import { packageTone, packagesOn, statusLine, type Order } from '../lib/inbox'
 
 interface Props {
   email: string
@@ -22,10 +23,11 @@ interface Props {
   dayExtra: (date: string, showAdd?: boolean) => ReactNode
   anytime: ReactNode
   trips: TripsData
+  orders?: Order[]
 }
 
 /** The week: seven day cards, then the selected day opened below (bills + journal). */
-export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime, trips }: Props) {
+export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime, trips, orders = [] }: Props) {
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
 
@@ -114,6 +116,17 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
                   <span className="truncate">{x.time ? `${timeLabel(x.time)} ` : ''}{x.label}</span>
                 </span>
               ))}
+
+              {packagesOn(orders, k, today).map((o) => {
+                const tone = packageTone(o, today)
+                return (
+                  <span key={o.id} title={statusLine(o, today)}
+                    className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold min-w-0 ${tone === 'late' ? 'bg-warn-soft text-bad' : 'bg-pkg-soft text-pkg-ink'}`}>
+                    <span aria-hidden="true">{tone === 'done' ? '✅' : '📦'}</span>
+                    <span className={`truncate ${tone === 'done' ? 'line-through' : ''}`}>{o.store}{tone === 'late' ? ' · late' : tone === 'delayed' ? ' · delayed' : ''}</span>
+                  </span>
+                )
+              })}
 
               {pay && (
                 <span className="self-start rounded-full bg-pay text-white text-xs font-bold px-2.5 py-0.5">

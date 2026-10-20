@@ -21,6 +21,9 @@
   --warn: #C2410C;
   --warn-soft: #FFE2CC;
   --bad: #DC2626;
+  --pkg: #0D9488;
+  --pkg-soft: #CCFBF1;
+  --pkg-ink: #115E59;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -44,6 +47,9 @@
     --warn: #FF9A52;
     --warn-soft: #3F220D;
     --bad: #FF6B6B;
+    --pkg: #2DD4BF;
+    --pkg-soft: #0B3B37;
+    --pkg-ink: #7EEBDD;
     color-scheme: dark;
   }
 }
@@ -68,6 +74,9 @@
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
   --color-bad: var(--bad);
+  --color-pkg: var(--pkg);
+  --color-pkg-soft: var(--pkg-soft);
+  --color-pkg-ink: var(--pkg-ink);
   --font-sans: "Arial Nova Cond", "Arial Nova Condensed", "Archivo Narrow", "Arial Narrow", Arial, sans-serif;
 }
 

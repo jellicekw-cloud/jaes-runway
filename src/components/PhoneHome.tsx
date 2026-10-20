@@ -11,6 +11,7 @@ import { eventsOn, todosOn, type Plans } from '../lib/plans'
 import { Eye, EyeOff } from './icons'
 import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 import JournalEditor from './JournalEditor'
+import { packagesOn, type Order } from '../lib/inbox'
 
 interface Props {
   userId: string
@@ -23,11 +24,12 @@ interface Props {
   bottom?: ReactNode       // travel plans card
   plans: Plans
   trips: TripsData
+  orders?: Order[]
   dayExtra?: (date: string, showAdd?: boolean) => ReactNode
 }
 
 /** Phone Home: balances, savings challenge, next 3 days, 3-day journal. */
-export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, top, bottom, plans, trips, dayExtra }: Props) {
+export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, top, bottom, plans, trips, orders = [], dayExtra }: Props) {
   const days = [0, 1, 2].map((i) => addDays(today, i))
   const [journal, setJournal] = useState<JournalEntry[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -122,7 +124,7 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
         {days.map((k, i) => {
           const d = dateOf(k)
           const busy = isPayday(m, k) || Boolean(savingsOn(m, k)) || obligationsOn(m, k, today).length > 0
-          const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0 || itemsOn(trips, k).length > 0 || tripsOn(trips, k).length > 0
+          const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0 || itemsOn(trips, k).length > 0 || tripsOn(trips, k).length > 0 || (k !== today && packagesOn(orders, k, today).length > 0)
           return (
             <div key={k} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2.5">
               <div className="flex flex-col items-center pt-1">

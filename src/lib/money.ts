@@ -475,7 +475,7 @@ export async function addAfterpayOrder(
   _d: MoneyData,
   fields: { name: string; total: number; purchased_on: string; first_payment: string; account_id: string | null; card_id: string | null },
   category = 'Shopping',
-): Promise<void> {
+): Promise<string> {
   const { purchased_on, first_payment, ...rest } = fields
   const id = await insertRow('afterpay_orders', { ...rest, order_date: first_payment, installments: 4, interval_days: 14 })
   if (first_payment <= purchased_on) {
@@ -489,6 +489,7 @@ export async function addAfterpayOrder(
     occurred_on: purchased_on, amount: fields.total, description: `${fields.name} (Afterpay)`, category, source: 'afterpay', afterpay_order_id: id,
   })
   if (e2) throw e2
+  return id
 }
 
 /** Moves an order's payment schedule: payment 1 on this date, the rest every 2 weeks after. */

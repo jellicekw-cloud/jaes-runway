@@ -14,6 +14,8 @@ import { useIsPhone } from '../lib/useIsPhone'
 import { EMPTY_TRIPS, loadTrips, type TripsData } from '../lib/trips'
 import TripsView, { DayTrips, TravelCard, TripModeCard } from './Trips'
 import type { PhoneTab } from './PhoneShell'
+import { EMPTY_INBOX, arrivingToday, loadInbox, stillReading, waitingCount, type CardKind, type InboxData } from '../lib/inbox'
+import { ArrivingToday, DayPackages, InboxHomeCard, InboxPanel } from './Inbox'
 
 type Tab = 'week' | 'bills' | 'money' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
@@ -36,6 +38,9 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [tripsError, setTripsError] = useState('')
   const [openTripId, setOpenTripId] = useState<string | null>(null)
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('home')
+  const [inbox, setInbox] = useState<InboxData>(EMPTY_INBOX)
+  const [inboxOpen, setInboxOpen] = useState(false)
+  const [inboxPaste, setInboxPaste] = useState(false)
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
   const subsLogged = useRef(false)
@@ -75,6 +80,36 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
   useEffect(() => { void reloadTrips() }, [reloadTrips])
 
+  const reloadInbox = useCallback(async () => {
+    try { setInbox(await loadInbox(today)) } catch { /* Inbox tables not set up yet, or offline: keep what we have */ }
+  }, [today])
+
+  // Inbox: on open, when you come back to the app, every 2 minutes, and every few seconds while an email is being read
+  useEffect(() => {
+    void reloadInbox()
+    const onFocus = () => { if (document.visibilityState === 'visible') void reloadInbox() }
+    document.addEventListener('visibilitychange', onFocus)
+    const t = window.setInterval(() => void reloadInbox(), 120_000)
+    return () => { document.removeEventListener('visibilitychange', onFocus); window.clearInterval(t) }
+  }, [reloadInbox])
+  const readingNow = stillReading(inbox).length > 0
+  useEffect(() => {
+    if (!readingNow) return
+    const t = window.setInterval(() => void reloadInbox(), 4000)
+    return () => window.clearInterval(t)
+  }, [readingNow, reloadInbox])
+
+  const openInbox = (paste = false) => { setInboxPaste(paste); setInboxOpen(true) }
+  async function onInboxAdded(line: string, kind: CardKind) {
+    showToast(line)
+    await Promise.all([
+      reloadInbox(),
+      kind === 'order' || kind === 'afterpay' ? reloadMoney() : Promise.resolve(),
+      kind === 'appointment' ? reloadPlans() : Promise.resolve(),
+      kind === 'trip' ? reloadTrips() : Promise.resolve(),
+    ])
+  }
+
   function openTrip(id: string | null) {
     setOpenTripId(id)
     if (isPhone) setPhoneTab('trips')
@@ -85,6 +120,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const openAdd = (mode: AddMode = 'buy') => { setAddMode(mode); setLogOpen(true) }
   const dayPlans = (date: string, showAdd = true) => (
     <>
+      {/* Home's own Arriving today box already shows today's packages */}
+      {(showAdd || date !== today) && <DayPackages date={date} today={today} orders={inbox.orders} reload={reloadInbox} />}
       <DayTrips date={date} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
       <DayPlans date={date} today={today} plans={plans} reload={reloadPlans} showAdd={showAdd} />
     </>
@@ -100,6 +137,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const np = nextPayday(moneyData, today)
   const due = dueBeforePayday(moneyData, today)
   const late = overdue(moneyData, today)
+  const waiting = waitingCount(inbox)
+  const arriving = arrivingToday(inbox.orders, today)
 
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
@@ -113,7 +152,10 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
   const shared = (
     <>
+      <InboxPanel open={inboxOpen} onClose={() => setInboxOpen(false)} isPhone={isPhone} focusPaste={inboxPaste} today={today}
+        data={inbox} reload={reloadInbox} money={moneyData} trips={trips} onAdded={onInboxAdded} />
       <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} mode={addMode} onMode={setAddMode} reloadPlans={reloadPlans}
+        onPasteEmail={() => { setLogOpen(false); openInbox(true) }}
         today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
       {plansError && (
         <div role="alert" className="fixed left-3 right-3 top-3 z-40 rounded-xl bg-bad text-white px-4 py-2.5 text-sm font-bold">
@@ -137,7 +179,12 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           money={moneyData} moneyLoaded={moneyLoaded} moneyError={moneyError}
           reloadMoney={reloadMoney} onLog={() => openAdd('buy')}
           homeExtra={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />}
-          homeTop={<TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />}
+          homeTop={<>
+            <InboxHomeCard data={inbox} today={today} onOpen={() => openInbox()} />
+            <TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
+            <ArrivingToday orders={inbox.orders} today={today} reload={reloadInbox} onOpen={() => openInbox()} />
+          </>}
+          orders={inbox.orders}
           homeBottom={tripsLoaded ? <TravelCard today={today} data={trips} onOpenTrip={openTrip} onPlan={() => openTrip(null)} /> : null}
           plans={plans} trips={trips} tripsView={tripsView} dayExtra={dayPlans} />
         {shared}
@@ -191,6 +238,16 @@ export default function AppShell({ email, userId }: { email: string; userId: str
                 : `Due before payday · ${money(due.total)}${due.missingAmounts ? '+' : ''} (${due.billCount} bill${due.billCount === 1 ? '' : 's'}, ${due.subCount} auto-pay)`}
             </span>
           )}
+          <button type="button" onClick={() => openInbox()} aria-label={`Inbox, ${waiting} to review`}
+            className={`inline-flex items-center gap-1.5 rounded-full py-1.5 px-3 font-bold text-sm border-0 cursor-pointer ${waiting ? 'bg-white text-header ring-2 ring-accent-hi' : 'bg-header-2 text-header-muted hover:text-white'}`}>
+            <span aria-hidden="true">✉</span> Inbox{waiting ? ` · ${waiting}` : ''}
+          </button>
+          {arriving.length > 0 && (
+            <button type="button" onClick={() => openInbox()}
+              className="inline-flex items-center gap-1.5 rounded-full bg-pkg-soft text-pkg-ink py-1.5 px-3 font-bold text-sm border-0 cursor-pointer">
+              <span aria-hidden="true">📦</span> {arriving.length} arriving today
+            </button>
+          )}
           {late.length > 0 && (
             <button type="button" onClick={() => openDay(late[0].date)}
               className="inline-flex items-center rounded-full bg-bad text-white py-1.5 px-3 font-bold text-sm border-0 cursor-pointer">
@@ -222,7 +279,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       {tab === 'week' && (
         <WeekView email={email} userId={userId} today={today} selected={selected} onSelect={setSelected}
           money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
-          plans={plans} trips={trips} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
+          plans={plans} trips={trips} orders={inbox.orders} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
       )}
       {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}

@@ -19,10 +19,11 @@ interface Props {
   money: MoneyData
   reloadMoney: () => Promise<void>
   onLogged: (message: string) => void
+  onPasteEmail?: () => void
 }
 
 /** The + button's window: log a purchase from anywhere in the app. */
-export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, today, money: m, reloadMoney, onLogged }: Props) {
+export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, today, money: m, reloadMoney, onLogged, onPasteEmail }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const amountRef = useRef<HTMLInputElement>(null)
   const [amount, setAmount] = useState('')
@@ -127,6 +128,12 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
               className={`h-10 rounded-lg border-0 font-bold cursor-pointer ${mode === k ? 'bg-accent text-accent-ink' : 'bg-transparent text-muted'}`}>{l}</button>
           ))}
         </div>
+        {onPasteEmail && (
+          <button type="button" onClick={onPasteEmail}
+            className="-mt-2 self-start bg-transparent border-0 p-0 text-sm font-bold text-accent underline cursor-pointer">
+            Have an email instead? Paste it into the Inbox
+          </button>
+        )}
 
         {mode !== 'buy' ? (
           <form onSubmit={submitPlan} className="flex flex-col gap-4">

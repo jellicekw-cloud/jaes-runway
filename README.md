@@ -58,4 +58,5 @@ supabase/
 5. ✅ Phone layout: Home (balances, savings, next 3 days, 3-day journal), month calendar, bottom tabs with +
 6. ✅ To-dos (anytime, dated, late roll forward, repeating) and calendar events; + Add: Purchase | To-do | Event
 7. ✅ Trips: itinerary (flights, hotel, car, drives, food, events), standby / award certificate flights with backups, who's on each flight, packing, passports, budget; trips on the week, month, day panels and phone Home (travel card + trip mode)
+8. ✅ Inbox: forwarded emails (CloudMailin → Supabase Edge Function → Claude) become orders, Afterpay plans, appointments and trip items to review; shipping / delay / delivery emails update orders on their own; Arriving today, package chips on the calendar, paste-an-email. Setup: INBOX_SETUP.md
 8. Later: alerts, "ask it" (can I afford this?), confirmation-email import
