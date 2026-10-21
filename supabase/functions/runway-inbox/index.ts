@@ -39,7 +39,7 @@ const reply = (body: unknown, status = 200) =>
 // ---------------------------------------------------------------------------
 
 type OrderStatus = 'ordered' | 'shipped' | 'out_for_delivery' | 'delivered' | 'delayed' | 'cancelled'
-type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'other'
+type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'other'
 
 interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
@@ -52,12 +52,13 @@ interface TripItemInfo {
   trip_id: string | null; kind: string | null; title: string | null; date: string | null; time: string | null; end_date: string | null; end_time: string | null
   confirmation: string | null; airline: string | null; flight_number: string | null; origin: string | null; destination: string | null; details: string | null; cost: number | null
 }
+interface MoneyInInfo { amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null }
 interface Reading {
   kind: Kind; confident: boolean; summary: string; existing_order_id: string | null
-  order: OrderInfo | null; afterpay: AfterpayInfo | null; appointment: AppointmentInfo | null; trip_item: TripItemInfo | null
+  order: OrderInfo | null; afterpay: AfterpayInfo | null; appointment: AppointmentInfo | null; trip_item: TripItemInfo | null; money_in: MoneyInInfo | null
 }
 interface Suggestion {
-  order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null
+  order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
   link_order_id?: string | null; code?: string | null; link?: string | null
 }
 interface EmailRow {
@@ -385,8 +386,8 @@ const TOOL = {
     required: ['kind', 'confident', 'summary'],
     properties: {
       kind: {
-        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'other'],
-        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for an installment of an existing Afterpay plan, refunds, or account notices. appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. other = anything else (marketing, newsletters, receipts with nothing to track).',
+        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'other'],
+        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for an installment of an existing Afterpay plan, refunds, or account notices. appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert, a refund to her account. other = anything else (marketing, newsletters, receipts with nothing to track).',
       },
       confident: { type: 'boolean', description: 'false if you are guessing about what kind it is or about the key dates' },
       summary: { type: 'string', description: 'One short line for Jae, e.g. "Amazon order: Echo Dot, arriving Thu Oct 23"' },
@@ -416,6 +417,15 @@ const TOOL = {
         ...nul('object'),
         properties: { title: nul('string'), date: nul('string'), start_time: nul('string'), end_time: nul('string'), location: nul('string'), notes: nul('string') },
       },
+      money_in: {
+        ...nul('object'),
+        properties: {
+          amount: nul('number'), from: { ...nul('string'), description: 'who or what sent it' }, received_on: nul('string'),
+          via: { type: ['string', 'null'], enum: ['zelle', 'cashapp', 'venmo', 'deposit', 'refund', 'other', null] },
+          is_paycheck: { type: 'boolean', description: 'true for her regular Delta paycheck / payroll direct deposit (already counted by the app)' },
+          account_hint: { ...nul('string'), description: 'bank or account it went into, if the email says (e.g. "SoFi", "Navy Federal checking")' },
+        },
+      },
       trip_item: {
         ...nul('object'),
         properties: {
@@ -441,6 +451,7 @@ Rules:
 - Afterpay normally splits a purchase into 4 payments every 2 weeks. A brand-new Afterpay purchase is kind "afterpay". If the email says the first payment is due later (not taken today), first_payment_on is that later date.
 - Jae works for Delta and often flies non-rev standby or on award certificates; standby listings and itineraries are kind "trip".
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
+- Money Jae received (Zelle from Navy Federal, side-work deposits into SoFi, Cash App, refunds) is kind "money_in". Her regular Delta payroll deposit is money_in with is_paycheck true.
 - If it's a forwarded email, read the original message inside.`
 
 async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips: TripRow[]): Promise<Reading> {
@@ -482,10 +493,10 @@ async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips
 
 /** Keeps only well-formed values from the AI's answer. */
 function clean(r: Record<string, unknown>): Reading {
-  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'other']
+  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'other']
   const statuses: OrderStatus[] = ['ordered', 'shipped', 'out_for_delivery', 'delivered', 'delayed', 'cancelled']
   const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null)
-  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item)
+  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in)
   const itemKinds = ['flight', 'hotel', 'car', 'drive', 'food', 'event', 'other']
   return {
     kind: kinds.includes(r.kind as Kind) ? r.kind as Kind : 'other',
@@ -509,6 +520,9 @@ function clean(r: Record<string, unknown>): Reading {
       date: isDay(t.date), time: isTime(t.time), end_date: isDay(t.end_date), end_time: isTime(t.end_time),
       confirmation: isText(t.confirmation)?.toUpperCase() ?? null, airline: isText(t.airline), flight_number: isText(t.flight_number),
       origin: isText(t.origin), destination: isText(t.destination), details: isText(t.details), cost: isNum(t.cost),
+    },
+    money_in: mi && {
+      amount: isNum(mi.amount), from: isText(mi.from), received_on: isDay(mi.received_on), via: isText(mi.via), is_paycheck: mi.is_paycheck === true, account_hint: isText(mi.account_hint),
     },
   }
 }
@@ -604,6 +618,11 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
       })
     }
 
+    if (r.kind === 'money_in' && r.money_in?.amount) {
+      if (r.money_in.is_paycheck) return done({ status: 'auto', kind: 'money_in', summary: `${summary} (paycheck, already counted)`, suggestion: { money_in: r.money_in } })
+      return done({ status: r.confident ? 'review' : 'unsure', kind: 'money_in', summary, suggestion: { money_in: r.money_in } })
+    }
+
     if (r.kind === 'appointment' && r.appointment?.date) {
       return done({ status: r.confident ? 'review' : 'unsure', kind: 'appointment', summary, suggestion: { appointment: r.appointment } })
     }
@@ -617,7 +636,7 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
     // Couldn't place it (or the key details are missing): Jae takes a look
     return done({
       status: 'unsure', kind: r.kind, summary,
-      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item },
+      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in },
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

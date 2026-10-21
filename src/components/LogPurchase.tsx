@@ -6,8 +6,9 @@ import {
 } from '../lib/money'
 import { CATEGORIES } from '../lib/types'
 import { REPEAT_LABEL, addEvent, addTodo, type Repeat } from '../lib/plans'
+import { MoneyInForm } from './MoneyIn'
 
-export type AddMode = 'buy' | 'todo' | 'event'
+export type AddMode = 'buy' | 'in' | 'todo' | 'event'
 
 interface Props {
   open: boolean
@@ -59,7 +60,7 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
       setText(''); setWhen(mode === 'event' ? 'today' : 'none'); setPick(today); setRepeat('none'); setTime(''); setPlace('')
       setWithKey(nfcu ? `a:${nfcu}` : options[0]?.key ?? '')
       el.showModal()
-      requestAnimationFrame(() => (mode === 'buy' ? amountRef.current : textRef.current)?.focus())
+      requestAnimationFrame(() => (mode === 'buy' ? amountRef.current : mode === 'in' ? document.getElementById('mi-amount') : textRef.current)?.focus())
     }
     if (!open && el.open) el.close()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,11 +122,11 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
           </button>
         </div>
 
-        <div role="tablist" aria-label="What to add" className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1">
-          {([['buy', 'Purchase'], ['todo', 'To-do'], ['event', 'Event']] as [AddMode, string][]).map(([k, l]) => (
+        <div role="tablist" aria-label="What to add" className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1">
+          {([['buy', 'Purchase'], ['in', 'Money in'], ['todo', 'To-do'], ['event', 'Event']] as [AddMode, string][]).map(([k, l]) => (
             <button key={k} type="button" role="tab" aria-selected={mode === k}
-              onClick={() => { onMode(k); setError(''); if (k === 'event' && when === 'none') setWhen('today'); requestAnimationFrame(() => (k === 'buy' ? amountRef.current : textRef.current)?.focus()) }}
-              className={`h-10 rounded-lg border-0 font-bold cursor-pointer ${mode === k ? 'bg-accent text-accent-ink' : 'bg-transparent text-muted'}`}>{l}</button>
+              onClick={() => { onMode(k); setError(''); if (k === 'event' && when === 'none') setWhen('today'); requestAnimationFrame(() => (k === 'buy' ? amountRef.current : k === 'in' ? document.getElementById('mi-amount') : textRef.current)?.focus()) }}
+              className={`h-10 px-1 rounded-lg border-0 font-bold cursor-pointer text-sm sm:text-base whitespace-nowrap ${mode === k ? (k === 'in' ? 'bg-pay text-white' : 'bg-accent text-accent-ink') : 'bg-transparent text-muted'}`}>{l}</button>
           ))}
         </div>
         {onPasteEmail && (
@@ -135,7 +136,9 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
           </button>
         )}
 
-        {mode !== 'buy' ? (
+        {mode === 'in' ? (
+          <MoneyInForm key={open ? 'open' : 'closed'} m={m} today={today} reloadMoney={reloadMoney} onDone={(msg) => { onLogged(msg); onClose() }} />
+        ) : mode !== 'buy' ? (
           <form onSubmit={submitPlan} className="flex flex-col gap-4">
             <label htmlFor="ad-text" className="flex flex-col gap-1.5">
               <span className="text-xs font-bold tracking-widest uppercase text-muted">{mode === 'todo' ? 'What needs doing' : 'Event'}</span>

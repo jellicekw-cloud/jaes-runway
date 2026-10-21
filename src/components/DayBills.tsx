@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { daysBetween, money, shortDate } from '../lib/dates'
 import {
-  isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, saveDeposit, savingsOn, undoDeposit, undoPayment, type MoneyData, type Obligation,
+  hasMoneyIn, isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, saveDeposit, savingsOn, undoDeposit, undoPayment, type MoneyData, type Obligation,
 } from '../lib/money'
+import { DayMoneyIn } from './MoneyIn'
 
 interface Props {
   date: string
@@ -19,7 +20,8 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
   const pay = isPayday(m, date)
   const save = savingsOn(m, date)
 
-  if (!pay && !save && items.length === 0) return null
+  const moneyIn = hasMoneyIn(m, date, today)
+  if (!pay && !save && !moneyIn && items.length === 0) return null
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -34,6 +36,8 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
           </span>
         </div>
       )}
+
+      {moneyIn && <DayMoneyIn date={date} today={today} money={m} reloadMoney={reloadMoney} />}
 
       {save && <SavingsRow date={date} today={today} money={m} reloadMoney={reloadMoney} />}
 

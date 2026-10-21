@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { DAYS, MONTHS, dateOf, keyOf, lastDayOfMonth } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
-import { isPayday, obligationsOn, savingsOn, type MoneyData } from '../lib/money'
+import { hasMoneyIn, isPayday, obligationsOn, savingsOn, type MoneyData } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
 import DayBills from './DayBills'
 import { eventsOn, todosOn, type Plans } from '../lib/plans'
@@ -93,6 +93,7 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
               ...pkgDots,
               ...planDots,
               ...(save && !save.deposit ? ['var(--pay)'] : []),
+              ...(hasMoneyIn(m, k, today) ? ['var(--pay)'] : []),
               ...ob.filter((o) => o.status !== 'paid').slice(0, 3).map((o) => (o.kind === 'sub' ? 'var(--muted)' : o.color)),
             ].slice(0, 3)
             const isSel = k === selected, isToday = k === today

@@ -5,6 +5,7 @@ import {
   saveDeposit, setAccountBalance, setHideBalances, setPaySplit, undoDeposit, type MoneyData, type SavingsStep,
 } from '../lib/money'
 import type { Account, Transaction } from '../lib/types'
+import { MoneyInSection } from './MoneyIn'
 
 interface Props {
   today: string
@@ -12,10 +13,11 @@ interface Props {
   loaded: boolean
   reloadMoney: () => Promise<void>
   onLog: () => void
+  onMoneyIn?: () => void
 }
 
 /** Money tab: checking balances, savings challenge, paycheck split, spending log. */
-export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog }: Props) {
+export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog, onMoneyIn }: Props) {
   const [error, setError] = useState('')
 
   async function run(change: () => Promise<unknown>) {
@@ -119,6 +121,8 @@ export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog 
           </div>
         </div>
       </Section>
+
+      <MoneyInSection m={m} today={today} reloadMoney={reloadMoney} onAdd={onMoneyIn ?? onLog} />
 
       {/* Spending */}
       <Section title="Spending" right={

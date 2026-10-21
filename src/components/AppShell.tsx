@@ -113,7 +113,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     showToast(line)
     await Promise.all([
       reloadInbox(),
-      kind === 'order' || kind === 'afterpay' ? reloadMoney() : Promise.resolve(),
+      kind === 'order' || kind === 'afterpay' || kind === 'money_in' ? reloadMoney() : Promise.resolve(),
       kind === 'appointment' ? reloadPlans() : Promise.resolve(),
       kind === 'trip' ? reloadTrips() : Promise.resolve(),
     ])
@@ -190,7 +190,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       <>
         <PhoneShell userId={userId} today={today} tab={phoneTab} onTab={(t) => { setPhoneTab(t); if (t === 'trips') setOpenTripId(null) }}
           money={moneyData} moneyLoaded={moneyLoaded} moneyError={moneyError}
-          reloadMoney={reloadMoney} onLog={() => openAdd('buy')}
+          reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')}
           homeExtra={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />}
           homeTop={<>
             <InboxHomeCard data={inbox} today={today} onOpen={() => openInbox()} />
@@ -299,7 +299,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       )}
       {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}
-      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} />}
+      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} />}
 
       {shared}
     </div>

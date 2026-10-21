@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { money, shortDate } from '../lib/dates'
-import { installmentAmount, type MoneyData } from '../lib/money'
+import { INCOME_KIND_LABEL, installmentAmount, type IncomeKind, type MoneyData } from '../lib/money'
 import { timeLabel } from '../lib/plans'
 import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
 import {
-  ORDER_STATUS_LABEL, addFromEmail, handled, markDelivered, needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, removeOrder,
+  ORDER_STATUS_LABEL, addFromEmail, moneyInDefaults, handled, markDelivered, needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, removeOrder,
   rereadEmail, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
-  type AfterpayInfo, type AppointmentInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
+  type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
 
@@ -31,8 +31,8 @@ function F({ label, wide, children }: { label: string; wide?: boolean; children:
   )
 }
 
-const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', gmail_confirm: '✉', other: '✉' }
-const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item' }
+const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', gmail_confirm: '✉', other: '✉' }
+const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in' }
 
 const blankOrder = (store: string | null = null): OrderInfo => ({
   store, order_number: null, items: null, total: null, ordered_on: null, status: 'ordered', carrier: null, tracking_number: null,
@@ -167,11 +167,16 @@ function initialKind(e: InboxEmail): CardKind | null {
   if (e.kind === 'afterpay') return e.suggestion.afterpay ? 'afterpay' : null
   if (e.kind === 'appointment') return e.suggestion.appointment ? 'appointment' : null
   if (e.kind === 'trip') return e.suggestion.trip_item ? 'trip' : null
+  if (e.kind === 'money_in') return e.suggestion.money_in ? 'money_in' : null
   return null
 }
 
-function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail): Suggestion {
+function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData): Suggestion {
   const who = e.from_name ?? null
+  if (kind === 'money_in') {
+    const base = { amount: null, from: who, received_on: null, via: null, is_paycheck: false, account_hint: null }
+    return { ...s, money_in: moneyInDefaults({ ...base, ...(s.money_in ?? {}) }, m) }
+  }
   if (kind === 'order') {
     const order = { ...blankOrder(who), ...(s.order ?? {}) }
     const afterpay = order.paid_with_afterpay || s.afterpay ? { ...blankAfterpay(order.store), ...(s.afterpay ?? {}) } : s.afterpay ?? null
@@ -183,7 +188,15 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail): Suggestion 
   return { ...s, trip_item: { ...blankTrip(e.subject), ...(s.trip_item ?? {}) } }
 }
 
-function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData): string[] {
+function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData, m: MoneyData): string[] {
+  if (kind === 'money_in' && s.money_in) {
+    const x = s.money_in
+    const acct = m.accounts.find((a) => a.id === x.account_id)
+    return [
+      `+${x.amount ? money(x.amount) : '?'}${x.from ? ` from ${x.from}` : ''}`,
+      `${INCOME_KIND_LABEL[x.income_kind ?? 'other']} · into ${acct?.institution ?? acct?.name ?? 'pick an account'}${x.received_on ? ` · ${shortDate(x.received_on)}` : ''}`,
+    ]
+  }
   if (kind === 'order' && s.order) {
     const o = s.order
     const lines = [[o.items, o.total !== null ? money(o.total) : null].filter(Boolean).join(' · ')]
@@ -225,15 +238,22 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
 }) {
   const unsure = e.status !== 'review'
   const [kind, setKind] = useState<CardKind | null>(unsure ? null : initialKind(e))
-  const [draft, setDraft] = useState<Suggestion>(() => (kind ? withDefaults(kind, e.suggestion, e) : e.suggestion))
+  const [draft, setDraft] = useState<Suggestion>(() => (kind ? withDefaults(kind, e.suggestion, e, m) : e.suggestion))
   const [editing, setEditing] = useState(false)
   const [showBody, setShowBody] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
 
+  // Money arrives after the Inbox sometimes: fill in the account once accounts are known
+  useEffect(() => {
+    if (kind === 'money_in' && draft.money_in && !draft.money_in.account_id && m.accounts.length) {
+      setDraft((d) => ({ ...d, money_in: moneyInDefaults(d.money_in!, m) }))
+    }
+  }, [kind, draft.money_in, m])
+
   function choose(k: CardKind) {
-    setKind(k); setDraft(withDefaults(k, e.suggestion, e)); setEditing(true); setError('')
+    setKind(k); setDraft(withDefaults(k, e.suggestion, e, m)); setEditing(true); setError('')
   }
 
   async function add() {
@@ -260,6 +280,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
       : kind === 'afterpay' ? `Afterpay · ${draft.afterpay?.store ?? sender(e)}`
         : kind === 'appointment' ? `Appointment · ${draft.appointment?.title ?? sender(e)}`
           : kind === 'trip' ? `Trip · ${draft.trip_item?.title ?? sender(e)}`
+          : kind === 'money_in' ? `Money in · ${draft.money_in?.amount ? money(draft.money_in.amount) : sender(e)}`
             : e.subject || sender(e)
   const icon = KIND_ICON[e.kind === 'gmail_confirm' ? 'gmail_confirm' : kind ?? e.kind ?? 'other'] ?? '✉'
 
@@ -308,7 +329,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
 
           {kind && !editing && (
             <ul className="m-0 p-0 list-none text-sm flex flex-col gap-0.5">
-              {describe(kind, draft, today, data, trips).map((l, i) => <li key={i} className={i === 0 ? '' : 'text-muted'}>{l}</li>)}
+              {describe(kind, draft, today, data, trips, m).map((l, i) => <li key={i} className={i === 0 ? '' : 'text-muted'}>{l}</li>)}
             </ul>
           )}
 
@@ -316,7 +337,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-bold tracking-wider uppercase text-muted">{kind ? 'Adding it as' : 'What is it?'}</span>
               <div className="flex flex-wrap gap-1.5">
-                {(['order', 'afterpay', 'appointment', 'trip'] as CardKind[]).map((k) => (
+                {(['order', 'afterpay', 'appointment', 'trip', 'money_in'] as CardKind[]).map((k) => (
                   <button key={k} type="button" aria-pressed={kind === k} onClick={() => choose(k)}
                     className={`h-9 px-3 rounded-full text-sm font-bold cursor-pointer border ${kind === k ? 'bg-accent text-accent-ink border-accent' : 'bg-surface-2 text-fg border-line'}`}>
                     {KIND_NAME[k]}
@@ -326,7 +347,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
             </div>
           )}
 
-          {kind && editing && <EditForm kind={kind} draft={draft} setDraft={setDraft} trips={trips} today={today} />}
+          {kind && editing && <EditForm kind={kind} draft={draft} setDraft={setDraft} trips={trips} today={today} m={m} />}
 
           {error && <p role="alert" className="m-0 text-sm font-bold text-bad">{error}</p>}
 
@@ -348,9 +369,31 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
   )
 }
 
-function EditForm({ kind, draft, setDraft, trips, today }: {
-  kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string
+function EditForm({ kind, draft, setDraft, trips, today, m }: {
+  kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string; m: MoneyData
 }) {
+  if (kind === 'money_in') {
+    const x = draft.money_in!
+    const set = (p: Partial<MoneyInInfo>) => setDraft((d) => ({ ...d, money_in: { ...d.money_in!, ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="Amount"><input className={inputCls} inputMode="decimal" defaultValue={x.amount ?? ''} onChange={(ev) => set({ amount: toNum(ev.target.value) })} /></F>
+        <F label="Date"><input type="date" className={inputCls} value={x.received_on ?? today} onChange={(ev) => set({ received_on: orNull(ev.target.value) })} /></F>
+        <F label="From"><input className={inputCls} value={x.from ?? ''} onChange={(ev) => set({ from: orNull(ev.target.value) })} /></F>
+        <F label="What is it">
+          <select className={inputCls} value={x.income_kind ?? 'other'} onChange={(ev) => set({ income_kind: ev.target.value as IncomeKind })}>
+            {(Object.keys(INCOME_KIND_LABEL) as IncomeKind[]).map((k) => <option key={k} value={k}>{INCOME_KIND_LABEL[k]}</option>)}
+          </select>
+        </F>
+        <F label="Went into" wide>
+          <select className={inputCls} value={x.account_id ?? ''} onChange={(ev) => set({ account_id: ev.target.value || null })}>
+            <option value="">Pick an account…</option>
+            {m.accounts.filter((a) => a.kind === 'checking').map((a) => <option key={a.id} value={a.id}>{a.institution ?? a.name}</option>)}
+          </select>
+        </F>
+      </div>
+    )
+  }
   if (kind === 'order') {
     const o = draft.order ?? blankOrder()
     const a = draft.afterpay ?? blankAfterpay(o.store)

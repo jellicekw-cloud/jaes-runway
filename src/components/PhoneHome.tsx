@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { DAYS, addDays, dateOf, money, shortDate } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
 import {
-  challengeGoal, challengeSteps, currentSavingsStep, estimateBalance, isPayday, nextPayday, obligationsOn, saveDeposit, savingsOn,
+  challengeGoal, challengeSteps, hasMoneyIn, currentSavingsStep, estimateBalance, isPayday, nextPayday, obligationsOn, saveDeposit, savingsOn,
   setHideBalances, type MoneyData,
 } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
@@ -126,7 +126,7 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
         <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-muted">Next 3 days</h2>
         {days.map((k, i) => {
           const d = dateOf(k)
-          const busy = isPayday(m, k) || Boolean(savingsOn(m, k)) || obligationsOn(m, k, today).length > 0
+          const busy = isPayday(m, k) || hasMoneyIn(m, k, today) || Boolean(savingsOn(m, k)) || obligationsOn(m, k, today).length > 0
           const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0 || itemsOn(trips, k).length > 0 || tripsOn(trips, k).length > 0 || (k !== today && packagesOn(orders, k, today).length > 0) || datesOn(dates, k).length > 0
           return (
             <div key={k} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2.5">

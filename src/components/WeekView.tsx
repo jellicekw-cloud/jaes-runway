@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, weekStart } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
-import { isPayday, obligationsOn, paycheckTotal, savingsOn, type MoneyData, type Obligation } from '../lib/money'
+import { INCOME_KIND_LABEL, expectedOn, incomeOn, isPayday, obligationsOn, paycheckTotal, savingsOn, type MoneyData, type Obligation } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
 import { eventsOn, timeLabel, todosOn, type Plans } from '../lib/plans'
 import JournalEditor from './JournalEditor'
@@ -141,6 +141,17 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
                   $ Payday{payTotal ? ` · ${money(payTotal)}` : ''}
                 </span>
               )}
+
+              {incomeOn(m, k).map((x) => (
+                <span key={x.id} className="self-start rounded-full bg-pay-soft text-pay-ink text-xs font-bold px-2.5 py-0.5 tnum">
+                  +{money(x.amount)} {INCOME_KIND_LABEL[x.kind]}
+                </span>
+              ))}
+              {expectedOn(m, k).filter((e) => !e.got && k >= today).map((e) => (
+                <span key={e.source.id} className="self-start rounded-full border border-dashed border-pay text-pay-ink text-xs font-bold px-2.5 py-0.5">
+                  {e.source.name}?
+                </span>
+              ))}
 
               {save && (
                 <span className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold min-w-0 ${save.deposit ? 'border-pay bg-pay-soft text-pay-ink' : 'border-pay bg-surface-2'}`}>

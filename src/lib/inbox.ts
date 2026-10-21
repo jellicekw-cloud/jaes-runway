@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { DAYS, addDays, dateOf, daysBetween, shortDate } from './dates'
-import { addAfterpayOrder, billsAccountId, type MoneyData } from './money'
+import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, type IncomeKind, type MoneyData } from './money'
 import { timeLabel } from './plans'
 import { createTrip, saveItem, type ItemKind, type PassType } from './trips'
 
@@ -30,13 +30,17 @@ export interface TripItemInfo {
   confirmation: string | null; airline: string | null; flight_number: string | null; origin: string | null; destination: string | null; details: string | null; cost: number | null
   pass_type?: PassType | null; new_trip_name?: string | null
 }
+export interface MoneyInInfo {
+  amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null
+  account_id?: string | null; income_kind?: IncomeKind | null   // set when you review it
+}
 export interface Suggestion {
-  order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null
+  order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
   link_order_id?: string | null; code?: string | null; link?: string | null
 }
 
 export type EmailStatus = 'reading' | 'review' | 'unsure' | 'auto' | 'added' | 'skipped' | 'merged' | 'error'
-export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip'
+export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip' | 'money_in'
 
 export interface InboxEmail {
   id: string; source: 'forward' | 'paste'; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null
@@ -175,6 +179,10 @@ export function needsFixing(kind: CardKind, s: Suggestion, trips: { id: string }
     if (!s.afterpay.total || s.afterpay.total <= 0) return 'Add the total.'
   }
   if (kind === 'appointment' && (!s.appointment?.title?.trim() || !s.appointment.date)) return 'Add a name and a date.'
+  if (kind === 'money_in') {
+    if (!s.money_in?.amount || s.money_in.amount <= 0) return 'Add the amount.'
+    if (!s.money_in.account_id) return 'Pick which account it went into.'
+  }
   if (kind === 'trip') {
     const t = s.trip_item
     if (!t?.title?.trim() || !t.date) return 'Add a name and a date.'
@@ -239,6 +247,15 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
     return `${a.title} added to ${shortDate(a.date!)}`
   }
 
+  if (kind === 'money_in') {
+    const x = s.money_in!
+    await addIncome(m, {
+      amount: x.amount!, kind: x.income_kind ?? 'other', from_name: x.from, account_id: x.account_id!, received_on: x.received_on ?? today,
+    })
+    await finish(e, s, kind)
+    return `Money in · $${x.amount!.toFixed(2)} logged`
+  }
+
   const t = s.trip_item!
   const tripId = t.trip_id ?? await createTrip({
     name: t.new_trip_name!.trim(), destination: t.destination, start_date: t.date, end_date: t.end_date ?? t.date, is_international: false, people: [],
@@ -278,3 +295,12 @@ async function callReader(body: Record<string, unknown>): Promise<{ status: stri
 
 export const pasteEmail = (text: string) => callReader({ action: 'paste', text })
 export const rereadEmail = (id: string) => callReader({ action: 'reread', id })
+
+/** Best guesses for a money-in email: what kind it is and which account it landed in. */
+export function moneyInDefaults(x: MoneyInInfo, m: MoneyData): MoneyInInfo {
+  const kind: IncomeKind = x.income_kind ?? (x.via === 'zelle' ? 'zelle' : x.via === 'refund' ? 'refund' : 'other')
+  const hint = (x.account_hint ?? '').toLowerCase()
+  const byHint = hint ? m.accounts.find((a) => a.kind === 'checking' && (a.institution ?? a.name).toLowerCase().split(/\s+/).some((w) => w.length > 2 && hint.includes(w))
+    || (hint.includes('navy') && (a.institution ?? '').toLowerCase() === 'nfcu')) : undefined
+  return { ...x, income_kind: kind, account_id: x.account_id ?? byHint?.id ?? defaultIncomeAccount(m, kind) }
+}

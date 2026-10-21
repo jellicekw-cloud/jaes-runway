@@ -20,11 +20,21 @@ export interface MoneyData {
   challenge: SavingsChallenge | null
   deposits: SavingsDeposit[]
   transactions: Transaction[]
+  income: Income[]
+  incomeSources: IncomeSource[]
 }
+
+export type IncomeKind = 'side_work' | 'zelle' | 'refund' | 'gift' | 'other'
+export const INCOME_KIND_LABEL: Record<IncomeKind, string> = { side_work: 'Side work', zelle: 'Zelle', refund: 'Refund', gift: 'Gift', other: 'Other' }
+export interface Income {
+  id: string; received_on: string; amount: number; kind: IncomeKind; from_name: string | null; account_id: string | null
+  income_source_id: string | null; expected_on: string | null; note: string | null; created_at: string
+}
+export interface IncomeSource { id: string; name: string; account_id: string | null; days: number[]; expected_amount: number | null; is_active: boolean }
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, deposits: [], transactions: [],
+  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [],
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
@@ -50,6 +60,12 @@ export async function loadMoney(today: string): Promise<MoneyData> {
   ])
   const failed = [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions].find((r) => r.error)
   if (failed?.error) throw failed.error
+  // Money in: tables come from 05_money_in.sql; until that's run, there's simply no money in yet
+  const [inc, srcs] = await Promise.all([
+    supabase.from('income').select('id, received_on, amount, kind, from_name, account_id, income_source_id, expected_on, note, created_at')
+      .gte('received_on', since).order('received_on', { ascending: false }).order('created_at', { ascending: false }),
+    supabase.from('income_sources').select('id, name, account_id, days, expected_amount, is_active').eq('is_active', true).order('created_at'),
+  ])
   const ch = ((challenges.data ?? []) as SavingsChallenge[])[0]
   return {
     settings: settings.data as Settings | null,
@@ -63,6 +79,8 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     challenge: ch ? { ...ch, first_amount: Number(ch.first_amount), step_amount: Number(ch.step_amount) } : null,
     deposits: ((deposits.data ?? []) as SavingsDeposit[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     transactions: ((transactions.data ?? []) as Transaction[]).map((t) => ({ ...t, amount: Number(t.amount) })),
+    income: inc.error ? [] : ((inc.data ?? []) as Income[]).map((x) => ({ ...x, amount: Number(x.amount) })),
+    incomeSources: srcs.error ? [] : ((srcs.data ?? []) as IncomeSource[]).map((x) => ({ ...x, expected_amount: num(x.expected_amount), days: (x.days ?? []).map(Number) })),
   }
 }
 
@@ -316,6 +334,9 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
 
     const paid = d.payments.filter((p) => p.account_id === a.id && after(p.created_at)).reduce((t, p) => t + p.amount, 0)
     if (paid) changes.push({ label: 'Payments', amount: -paid })
+
+    const cameIn = d.income.filter((x) => x.account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
+    if (cameIn) changes.push({ label: 'Money in', amount: cameIn })
   }
 
   const ch = d.challenge
@@ -504,4 +525,91 @@ export function parseMoney(v: string): number | null {
   if (!t) return null
   const n = Number(t)
   return Number.isFinite(n) ? round2(n) : null
+}
+
+// ---------------------------------------------------------------------------
+// Money in (besides paychecks)
+// ---------------------------------------------------------------------------
+
+/** How many days after its date an expected deposit keeps asking "did it land?" */
+export const EXPECTED_GRACE_DAYS = 5
+
+export const incomeOn = (d: MoneyData, date: string) => d.income.filter((x) => x.received_on === date)
+
+/** Anything money-in to show on this day (today also counts deposits still waiting from the last few days). */
+export function hasMoneyIn(d: MoneyData, date: string, today: string): boolean {
+  if (incomeOn(d, date).length) return true
+  if (date === today) return waitingDeposits(d, today).length > 0
+  return date > today && expectedOn(d, date).some((e) => !e.got)
+}
+
+export interface Expected { source: IncomeSource; date: string; got: Income | undefined }
+
+/** Side work (or any expected deposit) due on this exact day, whether it landed or not. */
+export function expectedOn(d: MoneyData, date: string): Expected[] {
+  return d.incomeSources
+    .filter((s) => s.days.some((day) => isMonthlyDueOn(day, date)))
+    .map((s) => ({ source: s, date, got: d.income.find((x) => x.income_source_id === s.id && x.expected_on === date) }))
+}
+
+/** Expected deposits that haven't been confirmed yet, from the last few days through today (oldest first). */
+export function waitingDeposits(d: MoneyData, today: string): Expected[] {
+  const out: Expected[] = []
+  for (let i = EXPECTED_GRACE_DAYS; i >= 0; i--) {
+    for (const e of expectedOn(d, addDays(today, -i))) if (!e.got) out.push(e)
+  }
+  return out
+}
+
+/** The expected day a side-work deposit on `date` most likely belongs to: unconfirmed, up to 5 days before or 2 days after. */
+export function matchExpected(d: MoneyData, sourceId: string, date: string): string | null {
+  for (const off of [0, -1, 1, -2, 2, -3, -4, -5]) {
+    const k = addDays(date, off)
+    const e = expectedOn(d, k).find((x) => x.source.id === sourceId)
+    if (e && !e.got) return k
+  }
+  return null
+}
+
+export async function addIncome(d: MoneyData, f: { amount: number; kind: IncomeKind; from_name: string | null; account_id: string | null; received_on: string; note?: string | null; expected_on?: string | null }): Promise<void> {
+  let income_source_id: string | null = null
+  let expected_on: string | null = null
+  if (f.kind === 'side_work') {
+    const src = d.incomeSources.find((s) => s.name.toLowerCase().includes('side')) ?? d.incomeSources[0]
+    if (src) {
+      income_source_id = src.id
+      expected_on = f.expected_on ?? matchExpected(d, src.id, f.received_on)
+    }
+  }
+  const { error } = await supabase.from('income').insert({
+    received_on: f.received_on, amount: f.amount, kind: f.kind, from_name: f.from_name?.trim() || null, account_id: f.account_id,
+    income_source_id, expected_on, note: f.note ?? null,
+  })
+  if (error) {
+    if (error.code === '23505') throw new Error('That side-work deposit is already logged.')
+    throw error
+  }
+}
+
+export async function deleteIncome(id: string): Promise<void> {
+  const { error } = await supabase.from('income').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function setExpectedAmount(sourceId: string, amount: number | null): Promise<void> {
+  const { error } = await supabase.from('income_sources').update({ expected_amount: amount }).eq('id', sourceId)
+  if (error) throw error
+}
+
+/** Default account for money in: Zelle → NFCU (the bills account), side work → its own account (SoFi). */
+export function defaultIncomeAccount(d: MoneyData, kind: IncomeKind): string | null {
+  if (kind === 'side_work') return (d.incomeSources.find((s) => s.name.toLowerCase().includes('side')) ?? d.incomeSources[0])?.account_id ?? null
+  return billsAccountId(d) ?? d.accounts.find((a) => a.kind === 'checking')?.id ?? null
+}
+
+/** Paychecks that have landed in a range (inclusive). */
+export function paychecksBetween(d: MoneyData, from: string, to: string): number {
+  let n = 0
+  for (let k = from; k <= to; k = addDays(k, 1)) if (isPayday(d, k)) n++
+  return round2(n * paycheckTotal(d))
 }

@@ -25,6 +25,7 @@ interface Props {
   moneyError: string
   reloadMoney: () => Promise<void>
   onLog: () => void
+  onMoneyIn?: () => void
   homeExtra?: ReactNode     // to-dos card
   homeTop?: ReactNode       // trip mode while you're away
   homeBottom?: ReactNode    // travel plans card
@@ -103,7 +104,7 @@ export default function PhoneShell(p: Props) {
             <div className="-mx-4">
               {moneyPart === 'bills'
                 ? <BillsView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={(d) => { setSelected(d); go('calendar') }} />
-                : <MoneyView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={onLog} />}
+                : <MoneyView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={onLog} onMoneyIn={p.onMoneyIn} />}
             </div>
           </>
         )}
