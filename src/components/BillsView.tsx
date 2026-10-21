@@ -69,21 +69,23 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         )}
       </Section>
 
-      <Section title="Credit cards">
+      <Section title="Credit cards" id="cards" right={<span className="font-bold tnum">{m.cards.length} cards</span>}>
         <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
           {m.cards.map((c) => <CardEditor key={c.id} card={c} m={m} today={today} run={run} onOpenDay={onOpenDay} />)}
         </div>
       </Section>
 
-      <Section title="Afterpay" right={<span className="font-bold tnum">{money(apLeft)} left</span>}>
+      <Section title="Afterpay" id="afterpay" right={<span className="font-bold tnum">{money(apLeft)} left</span>}>
         {m.orders.length === 0 && <p className="m-0 text-muted">No Afterpay orders yet. Add one below and its 4 payments land on your calendar.</p>}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
           {m.orders.map((o) => <OrderCard key={o.id} order={o} m={m} today={today} run={run} />)}
         </div>
-        <AddOrder payFrom={payFrom} today={today} run={run} m={m} />
+        <Reveal label="+ Add an Afterpay order" startOpen={m.orders.length === 0}>
+          <AddOrder payFrom={payFrom} today={today} run={run} m={m} />
+        </Reveal>
       </Section>
 
-      <Section title="Subscriptions" right={<span className="font-bold tnum">{money(subMonthly)}/mo · {money(subMonthly * 12)}/yr</span>}>
+      <Section title="Subscriptions" id="subs" startOpen={false} right={<span className="font-bold tnum">{money(subMonthly)}/mo · {money(subMonthly * 12)}/yr</span>}>
         <p className="m-0 text-sm text-muted">These charge on their own, so there's nothing to mark paid. Change an amount here when a price goes up.</p>
         <div className="relative rounded-2xl border border-line bg-surface overflow-x-auto">
           <table className="w-full border-collapse text-sm min-w-[620px]">
@@ -104,7 +106,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         <AddSub payFrom={payFrom} run={run} />
       </Section>
 
-      <Section title="Other monthly bills">
+      <Section title="Other monthly bills" id="bills" right={m.bills.length ? <span className="font-bold tnum">{m.bills.length}</span> : undefined}>
         {m.bills.length === 0 && <p className="m-0 text-muted">Rent, phone, car, utilities: anything monthly that isn't a card or a subscription.</p>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
           {m.bills.map((b) => <BillEditor key={b.id} bill={b} m={m} run={run} />)}
@@ -121,15 +123,55 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
 
 type Run = (change: () => Promise<unknown>) => Promise<void>
 
-function Section({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
+/** Open/closed state that survives a reload on this device. */
+function useRemembered(key: string, startOpen: boolean): [boolean, (v: boolean) => void] {
+  const [open, setOpenState] = useState(() => {
+    try { const v = localStorage.getItem(key); return v === null ? startOpen : v === '1' } catch { return startOpen }
+  })
+  const setOpen = (v: boolean) => { setOpenState(v); try { localStorage.setItem(key, v ? '1' : '0') } catch { /* fine */ } }
+  return [open, setOpen]
+}
+
+const Chevron = ({ open, size = 22 }: { open: boolean; size?: number }) => (
+  <svg className={`shrink-0 text-muted transition-transform ${open ? 'rotate-180' : ''}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+)
+
+/** A titled section. With an id, the title folds it away (and remembers). */
+function Section({ title, right, children, id, startOpen = true }: { title: string; right?: ReactNode; children: ReactNode; id?: string; startOpen?: boolean }) {
+  const [open, setOpen] = useRemembered(`runway-bills-section-${id ?? title}`, startOpen)
+  if (!id) {
+    return (
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="m-0 text-2xl font-bold">{title}</h2>
+          {right}
+        </div>
+        {children}
+      </section>
+    )
+  }
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="m-0 text-2xl font-bold">{title}</h2>
-        {right}
-      </div>
-      {children}
+      <h2 className="m-0">
+        <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+          className="w-full flex flex-wrap items-center gap-x-3 gap-y-1 bg-transparent border-0 p-0 text-left text-fg cursor-pointer">
+          <span className="text-2xl font-bold">{title}</span>
+          <Chevron open={open} />
+          <span className="ml-auto text-base">{right}</span>
+        </button>
+      </h2>
+      {open && children}
     </section>
+  )
+}
+
+/** A button that opens a form (starts open when there's nothing else to look at). */
+function Reveal({ label, startOpen, children }: { label: string; startOpen: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(startOpen)
+  if (open) return <>{children}</>
+  return (
+    <button type="button" onClick={() => setOpen(true)}
+      className="self-start h-11 px-4 rounded-xl border border-dashed border-muted bg-transparent text-fg font-bold cursor-pointer">{label}</button>
   )
 }
 
@@ -225,9 +267,7 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
   const util = c.balance !== null && c.credit_limit ? Math.round((c.balance / c.credit_limit) * 100) : null
   const recent = m.payments.filter((p) => p.card_id === c.id).slice(0, 3)
   const pre = `card-${c.id}`
-  const openKey = `runway-card-open-${c.id}`
-  const [open, setOpenState] = useState(() => { try { return localStorage.getItem(openKey) === '1' } catch { return false } })
-  const setOpen = (v: boolean) => { setOpenState(v); try { localStorage.setItem(openKey, v ? '1' : '0') } catch { /* fine */ } }
+  const [open, setOpen] = useRemembered(`runway-card-open-${c.id}`, false)
 
   // This month's due date (or next month's if this one is paid)
   const upcoming = (() => {
@@ -344,17 +384,35 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
   const from = o.account_id ? m.accounts.find((a) => a.id === o.account_id)?.institution : o.card_id ? m.cards.find((c) => c.id === o.card_id)?.name : null
   const bought = m.transactions.find((x) => x.afterpay_order_id === o.id)?.occurred_on
   const [editDates, setEditDates] = useState(false)
+  const [open, setOpen] = useRemembered(`runway-ap-open-${o.id}`, false)
+  const next = tiles.find((t) => t.ob.status !== 'paid')
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0">
-      <div className="flex items-center gap-2.5">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={`ap-${o.id}-details`}
+        className="flex items-center gap-2.5 w-full bg-transparent border-0 p-0 text-left text-fg cursor-pointer">
         <span className="size-3.5 rounded-full shrink-0 bg-[#0EA5E9]" />
         <b className="text-lg flex-1 truncate">{o.name}</b>
         <b className="tnum">{money(o.total)}</b>
-      </div>
+        <Chevron open={open} size={20} />
+        <span className="sr-only">{open ? 'Hide details' : 'Show details'}</span>
+      </button>
       <span className="h-2.5 rounded-full bg-line overflow-hidden">
         <span className="block h-full rounded-full bg-[#0EA5E9]" style={{ width: `${(paid / o.installments) * 100}%` }} />
       </span>
+      {!open && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted tnum">{paid} of {o.installments} paid</span>
+          {next ? (
+            <>
+              <b className={`tnum ${next.ob.status === 'overdue' ? 'text-bad' : ''}`}>· Next {money(next.ob.amount)} {next.ob.status === 'overdue' ? 'was due' : 'on'} {shortDate(next.date)}</b>
+              <button type="button" onClick={() => void run(() => markPaid(m, next.ob, next.ob.amount ?? 0))}
+                className="ml-auto h-8 px-3 rounded-lg border-0 bg-accent text-accent-ink text-xs font-bold cursor-pointer">Mark paid</button>
+            </>
+          ) : <b className="text-pay-ink">· Paid off 🎉</b>}
+        </div>
+      )}
+      {open && (<div id={`ap-${o.id}-details`} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted">
         <span>{bought ? `Bought ${shortDate(bought)} · ` : ''}first payment {shortDate(o.order_date)}</span>
         {editDates ? (
@@ -383,6 +441,7 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
         <span>{paid} of {o.installments} paid · every {o.interval_days} days · charges {from ?? 'not set'}</span>
         <ConfirmDelete label="Delete order" onConfirm={() => void run(() => deleteRow('afterpay_orders', o.id))} />
       </div>
+      </div>)}
     </div>
   )
 }
