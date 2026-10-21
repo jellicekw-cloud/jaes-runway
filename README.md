@@ -59,4 +59,5 @@ supabase/
 6. ✅ To-dos (anytime, dated, late roll forward, repeating) and calendar events; + Add: Purchase | To-do | Event
 7. ✅ Trips: itinerary (flights, hotel, car, drives, food, events), standby / award certificate flights with backups, who's on each flight, packing, passports, budget; trips on the week, month, day panels and phone Home (travel card + trip mode)
 8. ✅ Inbox: forwarded emails (CloudMailin → Supabase Edge Function → Claude) become orders, Afterpay plans, appointments and trip items to review; shipping / delay / delivery emails update orders on their own; Arriving today, package chips on the calendar, paste-an-email. Setup: INBOX_SETUP.md
+9. ✅ Birthdays & dates: birthdays (with ages), anniversaries, remembrance and other yearly dates; on the calendar every year; heads-up a week before (phone Home card, desktop pill); gift ideas $40 and under from Claude, "I'll get this" adds a to-do. Setup: run supabase/04_dates.sql, then re-paste the runway-inbox function (gift ideas live there)
 8. Later: alerts, "ask it" (can I afford this?), confirmation-email import

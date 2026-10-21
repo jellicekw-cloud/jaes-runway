@@ -9,6 +9,7 @@ import JournalEditor from './JournalEditor'
 import { ChevronIcon } from './icons'
 import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 import { packagesOn, type Order } from '../lib/inbox'
+import { datesOn, type SpecialDate } from '../lib/specialDates'
 
 interface Props {
   userId: string
@@ -21,10 +22,11 @@ interface Props {
   plans?: Plans
   trips?: TripsData
   orders?: Order[]
+  dates?: SpecialDate[]
 }
 
 /** Full month (Monday first) with dots for what's on each day; tap a day to open it below. */
-export default function MonthView({ userId, today, selected, onSelect, money: m, reloadMoney, dayExtra, plans, trips, orders = [] }: Props) {
+export default function MonthView({ userId, today, selected, onSelect, money: m, reloadMoney, dayExtra, plans, trips, orders = [], dates = [] }: Props) {
   const sel = dateOf(selected)
   const year = sel.getFullYear(), month = sel.getMonth()
   const first = keyOf(new Date(year, month, 1))
@@ -84,7 +86,9 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
             const away = trips ? tripsOn(trips, k).length > 0 : false
             const tripDots = trips ? itemsOn(trips, k).slice(0, 1).map(() => '#8B3DFF') : []
             const pkgDots = packagesOn(orders, k, today).slice(0, 1).map(() => 'var(--pkg)')
+            const celDots = datesOn(dates, k).slice(0, 1).map(() => 'var(--cel)')
             const dots = [
+              ...celDots,
               ...tripDots,
               ...pkgDots,
               ...planDots,
@@ -104,7 +108,7 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
             )
           })}
         </div>
-        <p className="m-0 text-xs text-muted">Green = payday · purple bar = on a trip · dots = trips, packages (teal), plans, to-dos, bills, auto-pay and savings · emoji = mood</p>
+        <p className="m-0 text-xs text-muted">Green = payday · purple bar = on a trip · dots = trips, birthdays (pink), packages (teal), plans, to-dos, bills, auto-pay and savings · emoji = mood</p>
       </section>
 
       <section aria-label="Selected day" className="rounded-2xl border border-line bg-surface p-3.5 flex flex-col gap-3">

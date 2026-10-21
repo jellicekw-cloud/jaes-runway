@@ -16,6 +16,8 @@ import TripsView, { DayTrips, TravelCard, TripModeCard } from './Trips'
 import type { PhoneTab } from './PhoneShell'
 import { EMPTY_INBOX, arrivingToday, loadInbox, stillReading, waitingCount, type CardKind, type InboxData } from '../lib/inbox'
 import { ArrivingToday, DayPackages, InboxHomeCard, InboxPanel } from './Inbox'
+import { comingUp, loadSpecialDates, type SpecialDate } from '../lib/specialDates'
+import { DatesHomeCard, DatesPanel, DatesPill, DayDates } from './Dates'
 
 type Tab = 'week' | 'bills' | 'money' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
@@ -41,6 +43,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [inbox, setInbox] = useState<InboxData>(EMPTY_INBOX)
   const [inboxOpen, setInboxOpen] = useState(false)
   const [inboxPaste, setInboxPaste] = useState(false)
+  const [dates, setDates] = useState<SpecialDate[]>([])
+  const [datesOpen, setDatesOpen] = useState(false)
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
   const subsLogged = useRef(false)
@@ -99,6 +103,11 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     return () => window.clearInterval(t)
   }, [readingNow, reloadInbox])
 
+  const reloadDates = useCallback(async () => {
+    try { setDates(await loadSpecialDates()) } catch { /* table not set up yet: no dates */ }
+  }, [])
+  useEffect(() => { void reloadDates() }, [reloadDates])
+
   const openInbox = (paste = false) => { setInboxPaste(paste); setInboxOpen(true) }
   async function onInboxAdded(line: string, kind: CardKind) {
     showToast(line)
@@ -121,6 +130,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const dayPlans = (date: string, showAdd = true) => (
     <>
       {/* Home's own Arriving today box already shows today's packages */}
+      <DayDates date={date} list={dates} />
       {(showAdd || date !== today) && <DayPackages date={date} today={today} orders={inbox.orders} reload={reloadInbox} />}
       <DayTrips date={date} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
       <DayPlans date={date} today={today} plans={plans} reload={reloadPlans} showAdd={showAdd} />
@@ -139,6 +149,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const late = overdue(moneyData, today)
   const waiting = waitingCount(inbox)
   const arriving = arrivingToday(inbox.orders, today)
+  const comingSoon = comingUp(dates, today).length > 0
 
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
@@ -152,6 +163,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
   const shared = (
     <>
+      <DatesPanel open={datesOpen} onClose={() => setDatesOpen(false)} isPhone={isPhone} today={today} list={dates} reload={reloadDates}
+        reloadPlans={reloadPlans} peopleNames={trips.people.map((p) => p.name)} onToast={showToast} />
       <InboxPanel open={inboxOpen} onClose={() => setInboxOpen(false)} isPhone={isPhone} focusPaste={inboxPaste} today={today}
         data={inbox} reload={reloadInbox} money={moneyData} trips={trips} onAdded={onInboxAdded} />
       <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} mode={addMode} onMode={setAddMode} reloadPlans={reloadPlans}
@@ -181,10 +194,12 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           homeExtra={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />}
           homeTop={<>
             <InboxHomeCard data={inbox} today={today} onOpen={() => openInbox()} />
+            {comingSoon && <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
             <TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
             <ArrivingToday orders={inbox.orders} today={today} reload={reloadInbox} onOpen={() => openInbox()} />
           </>}
-          orders={inbox.orders}
+          orders={inbox.orders} dates={dates}
+          homeDates={comingSoon ? null : <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
           homeBottom={tripsLoaded ? <TravelCard today={today} data={trips} onOpenTrip={openTrip} onPlan={() => openTrip(null)} /> : null}
           plans={plans} trips={trips} tripsView={tripsView} dayExtra={dayPlans} />
         {shared}
@@ -242,6 +257,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
             className={`inline-flex items-center gap-1.5 rounded-full py-1.5 px-3 font-bold text-sm border-0 cursor-pointer ${waiting ? 'bg-white text-header ring-2 ring-accent-hi' : 'bg-header-2 text-header-muted hover:text-white'}`}>
             <span aria-hidden="true">✉</span> Inbox{waiting ? ` · ${waiting}` : ''}
           </button>
+          <DatesPill list={dates} today={today} onOpen={() => setDatesOpen(true)} />
           {arriving.length > 0 && (
             <button type="button" onClick={() => openInbox()}
               className="inline-flex items-center gap-1.5 rounded-full bg-pkg-soft text-pkg-ink py-1.5 px-3 font-bold text-sm border-0 cursor-pointer">
@@ -279,7 +295,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       {tab === 'week' && (
         <WeekView email={email} userId={userId} today={today} selected={selected} onSelect={setSelected}
           money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
-          plans={plans} trips={trips} orders={inbox.orders} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
+          plans={plans} trips={trips} orders={inbox.orders} dates={dates} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
       )}
       {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}

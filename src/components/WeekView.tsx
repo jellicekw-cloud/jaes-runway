@@ -9,6 +9,7 @@ import DayBills from './DayBills'
 import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 import { ItemIcon } from './Trips'
 import { packageTone, packagesOn, statusLine, type Order } from '../lib/inbox'
+import { KIND_ICON, datesOn, headline, type SpecialDate } from '../lib/specialDates'
 
 interface Props {
   email: string
@@ -24,10 +25,11 @@ interface Props {
   anytime: ReactNode
   trips: TripsData
   orders?: Order[]
+  dates?: SpecialDate[]
 }
 
 /** The week: seven day cards, then the selected day opened below (bills + journal). */
-export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime, trips, orders = [] }: Props) {
+export default function WeekView({ email, userId, today, selected, onSelect, money: m, moneyLoaded, reloadMoney, plans, dayExtra, anytime, trips, orders = [], dates = [] }: Props) {
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
 
@@ -114,6 +116,12 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
                 <span key={`${x.item.id}:${x.part}`} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold min-w-0 bg-accent-soft border border-accent-hi/40">
                   <span className="text-accent shrink-0"><ItemIcon kind={x.item.kind} size={14} /></span>
                   <span className="truncate">{x.time ? `${timeLabel(x.time)} ` : ''}{x.label}</span>
+                </span>
+              ))}
+
+              {datesOn(dates, k).map((d) => (
+                <span key={d.id} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold min-w-0 bg-cel-soft text-cel-ink">
+                  <span aria-hidden="true">{KIND_ICON[d.kind]}</span><span className="truncate">{headline(d, k)}</span>
                 </span>
               ))}
 

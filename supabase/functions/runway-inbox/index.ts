@@ -3,7 +3,7 @@
 // Two ways in:
 //   1. CloudMailin posts each forwarded email here (JSON Normalized format). It proves itself
 //      with ?key=INBOX_SECRET in the URL (or the same secret as a basic-auth password).
-//   2. The Runway app posts a pasted email, or asks to read one again, signed in as Jae.
+//   2. The Runway app posts a pasted email, asks to read one again, or asks for gift ideas, signed in as Jae.
 //
 // Each email is saved, then Claude reads it and says what it is. Shipping, delay and delivery
 // updates for an order already in Runway are applied right away. Anything new (an order,
@@ -134,6 +134,21 @@ Deno.serve(async (req) => {
     await db.from('inbox_emails').update({ status: 'reading', error: null }).eq('id', id)
     const result = await readEmail(db, owner, got.data as EmailRow)
     return reply(result)
+  }
+
+  if (payload.action === 'gift_ideas') {
+    const got = await db.from('special_dates').select('id, kind, name, month, day, year, likes, gift_ideas')
+      .eq('id', String(payload.id ?? '')).eq('user_id', owner).single()
+    if (got.error) return reply({ error: 'Date not found' }, 404)
+    try {
+      const { data: s } = await db.from('settings').select('timezone').eq('user_id', owner).maybeSingle()
+      const today = todayIn((s as { timezone?: string } | null)?.timezone || 'America/New_York')
+      const ideas = await giftIdeas(got.data as SpecialDate, today)
+      await db.from('special_dates').update({ gift_ideas: ideas, gift_ideas_at: new Date().toISOString() }).eq('id', got.data.id)
+      return reply({ ideas })
+    } catch (e) {
+      return reply({ error: e instanceof Error ? e.message : String(e) }, 502)
+    }
   }
 
   return reply({ error: 'Unknown action' }, 400)
@@ -623,4 +638,82 @@ function mergeOrder(card: OrderInfo, o: OrderInfo, today: string): OrderInfo {
     if (k in out) (out as unknown as Record<string, unknown>)[k] = v
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Gift ideas for birthdays and anniversaries ($40 and under)
+// ---------------------------------------------------------------------------
+
+interface SpecialDate { id: string; kind: string; name: string; month: number; day: number; year: number | null; likes: string | null; gift_ideas: GiftIdea[] | null }
+interface GiftIdea { title: string; price: number; why: string; search: string }
+
+const GIFT_BUDGET = 40
+
+/** The next time this date comes around (today counts). Feb 29 falls on Feb 28 in other years. */
+export function nextOccurrence(month: number, day: number, today: string): string {
+  const y0 = Number(today.slice(0, 4))
+  for (const y of [y0, y0 + 1]) {
+    const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+    const d = month === 2 && day === 29 && !leap ? 28 : day
+    const key = `${y}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    if (key >= today) return key
+  }
+  return today
+}
+
+const GIFT_TOOL = {
+  name: 'suggest_gifts',
+  description: 'Suggest gift ideas.',
+  input_schema: {
+    type: 'object',
+    required: ['ideas'],
+    properties: {
+      ideas: {
+        type: 'array', minItems: 3, maxItems: 5,
+        items: {
+          type: 'object', required: ['title', 'price', 'why', 'search'],
+          properties: {
+            title: { type: 'string', description: 'specific item, e.g. "Stanley 30 oz tumbler in her favorite color"' },
+            price: { type: 'number', description: `typical US price in dollars, ${GIFT_BUDGET} or less` },
+            why: { type: 'string', description: 'one short sentence: why it suits them' },
+            search: { type: 'string', description: 'a few words to search for it online' },
+          },
+        },
+      },
+    },
+  },
+}
+
+async function giftIdeas(d: SpecialDate, today: string): Promise<GiftIdea[]> {
+  const key = env('ANTHROPIC_API_KEY')
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set in Supabase secrets')
+  const when = nextOccurrence(d.month, d.day, today)
+  const turning = d.year ? Number(when.slice(0, 4)) - d.year : null
+  const occasion = d.kind === 'birthday' ? `${d.name}'s birthday${turning ? ` (turning ${turning})` : ''}`
+    : d.kind === 'anniversary' ? `the anniversary "${d.name}"${turning ? ` (${turning} years)` : ''}`
+      : `"${d.name}"`
+  const before = (d.gift_ideas ?? []).map((g) => g.title).filter(Boolean)
+  const text = [
+    `Occasion: ${occasion}, on ${when}.`,
+    `What they like: ${d.likes?.trim() || '(nothing noted)'}`,
+    before.length ? `Already suggested last time (give different ones): ${before.join('; ')}` : '',
+  ].filter(Boolean).join('\n')
+
+  const res = await fetch(`${API_BASE}/v1/messages`, {
+    method: 'POST',
+    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL, max_tokens: 1200, tools: [GIFT_TOOL], tool_choice: { type: 'tool', name: 'suggest_gifts' },
+      system: `You suggest gift ideas for Jae, who lives in Atlanta, GA, and doesn't usually buy gifts, so each idea should be easy, specific and genuinely good. Every idea must cost $${GIFT_BUDGET} or less in the US and be easy to buy online or at a store like Target. Mix it up: a thing they'd use, something fun or personal, and a treat or small experience. If an age is given, make it fit that age. Keep "why" to one short sentence.`,
+      messages: [{ role: 'user', content: text }],
+    }),
+  })
+  if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+  const out = await res.json() as { content?: { type: string; input?: { ideas?: unknown[] } }[] }
+  const raw = out.content?.find((c) => c.type === 'tool_use')?.input?.ideas ?? []
+  const ideas = raw.map((x) => x as Record<string, unknown>).map((x) => ({
+    title: isText(x.title) ?? '', price: isNum(x.price) ?? 0, why: isText(x.why) ?? '', search: isText(x.search) ?? isText(x.title) ?? '',
+  })).filter((g) => g.title && g.price > 0 && g.price <= GIFT_BUDGET)
+  if (ideas.length === 0) throw new Error('No ideas came back. Try again.')
+  return ideas.slice(0, 5)
 }

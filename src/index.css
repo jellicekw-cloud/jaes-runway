@@ -24,6 +24,9 @@
   --pkg: #0D9488;
   --pkg-soft: #CCFBF1;
   --pkg-ink: #115E59;
+  --cel: #DB2777;
+  --cel-soft: #FCE7F3;
+  --cel-ink: #9D174D;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -50,6 +53,9 @@
     --pkg: #2DD4BF;
     --pkg-soft: #0B3B37;
     --pkg-ink: #7EEBDD;
+    --cel: #F472B6;
+    --cel-soft: #45122E;
+    --cel-ink: #F9A8D4;
     color-scheme: dark;
   }
 }
@@ -77,6 +83,9 @@
   --color-pkg: var(--pkg);
   --color-pkg-soft: var(--pkg-soft);
   --color-pkg-ink: var(--pkg-ink);
+  --color-cel: var(--cel);
+  --color-cel-soft: var(--cel-soft);
+  --color-cel-ink: var(--cel-ink);
   --font-sans: "Arial Nova Cond", "Arial Nova Condensed", "Archivo Narrow", "Arial Narrow", Arial, sans-serif;
 }
 

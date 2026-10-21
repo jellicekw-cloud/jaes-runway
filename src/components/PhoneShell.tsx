@@ -5,6 +5,7 @@ import type { MoneyData } from '../lib/money'
 import type { Plans } from '../lib/plans'
 import type { TripsData } from '../lib/trips'
 import type { Order } from '../lib/inbox'
+import type { SpecialDate } from '../lib/specialDates'
 import PhoneHome from './PhoneHome'
 import MonthView from './MonthView'
 import BillsView from './BillsView'
@@ -32,6 +33,8 @@ interface Props {
   trips: TripsData
   tripsView: ReactNode
   orders: Order[]
+  dates: SpecialDate[]
+  homeDates?: ReactNode   // birthdays row when nothing is this week
 }
 
 /** Phone layout: greeting bar on top, one screen at a time, tab bar with the + button at the bottom. */
@@ -82,11 +85,11 @@ export default function PhoneShell(p: Props) {
       <main className="flex-1 safe-x pt-3.5 flex flex-col" style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}>
         {tab === 'home' && (
           <PhoneHome userId={userId} today={today} money={money} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
-            extra={p.homeExtra} top={p.homeTop} bottom={p.homeBottom} plans={p.plans} trips={p.trips} orders={p.orders} dayExtra={p.dayExtra} />
+            extra={p.homeExtra} top={p.homeTop} bottom={p.homeBottom} plans={p.plans} trips={p.trips} orders={p.orders} dates={p.dates} datesRow={p.homeDates} dayExtra={p.dayExtra} />
         )}
         {tab === 'calendar' && (
           <MonthView userId={userId} today={today} selected={selected} onSelect={setSelected} money={money} reloadMoney={reloadMoney}
-            dayExtra={p.dayExtra} plans={p.plans} trips={p.trips} orders={p.orders} />
+            dayExtra={p.dayExtra} plans={p.plans} trips={p.trips} orders={p.orders} dates={p.dates} />
         )}
         {tab === 'trips' && <div className="-mx-4">{p.tripsView}</div>}
         {tab === 'money' && (
