@@ -18,6 +18,7 @@ import { EMPTY_INBOX, arrivingToday, loadInbox, stillReading, waitingCount, type
 import { ArrivingToday, DayPackages, InboxHomeCard, InboxPanel } from './Inbox'
 import { comingUp, loadSpecialDates, type SpecialDate } from '../lib/specialDates'
 import { DatesHomeCard, DatesPanel, DatesPill, DayDates } from './Dates'
+import { BirthdayCelebration } from './Confetti'
 
 type Tab = 'week' | 'bills' | 'money' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
@@ -150,6 +151,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const waiting = waitingCount(inbox)
   const arriving = arrivingToday(inbox.orders, today)
   const comingSoon = comingUp(dates, today).length > 0
+  const selfName = trips.people.find((p) => p.is_self)?.name
 
   const start = weekStart(selected, 1)
   const end = addDays(start, 6)
@@ -193,6 +195,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')}
           homeExtra={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />}
           homeTop={<>
+            <BirthdayCelebration list={dates} today={today} selfName={selfName} compact />
             <InboxHomeCard data={inbox} today={today} onOpen={() => openInbox()} />
             {comingSoon && <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
             <TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
@@ -284,6 +287,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           Sign out
         </button>
       </header>
+
+      <BirthdayCelebration list={dates} today={today} selfName={selfName} />
 
       {moneyError && (
         <div role="alert" className="safe-x py-2 bg-bad text-white text-sm font-bold">
