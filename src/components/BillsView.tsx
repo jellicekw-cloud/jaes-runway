@@ -70,7 +70,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
       </Section>
 
       <Section title="Credit cards">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
           {m.cards.map((c) => <CardEditor key={c.id} card={c} m={m} today={today} run={run} onOpenDay={onOpenDay} />)}
         </div>
       </Section>
@@ -225,6 +225,9 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
   const util = c.balance !== null && c.credit_limit ? Math.round((c.balance / c.credit_limit) * 100) : null
   const recent = m.payments.filter((p) => p.card_id === c.id).slice(0, 3)
   const pre = `card-${c.id}`
+  const openKey = `runway-card-open-${c.id}`
+  const [open, setOpenState] = useState(() => { try { return localStorage.getItem(openKey) === '1' } catch { return false } })
+  const setOpen = (v: boolean) => { setOpenState(v); try { localStorage.setItem(openKey, v ? '1' : '0') } catch { /* fine */ } }
 
   // This month's due date (or next month's if this one is paid)
   const upcoming = (() => {
@@ -239,11 +242,21 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
 
   return (
     <div className="flex flex-col gap-3.5 rounded-2xl border border-line bg-surface p-4 min-w-0">
-      <div className="flex items-center gap-2.5">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={`${pre}-details`}
+        className="flex items-center gap-2.5 w-full bg-transparent border-0 p-0 text-left text-fg cursor-pointer">
         <span className="size-4 rounded-full shrink-0" style={{ background: c.color }} />
-        <b className="text-xl flex-1 truncate">{c.name}</b>
+        <span className="flex-1 min-w-0">
+          <b className="block text-xl truncate">{c.name}</b>
+          {!open && (
+            <span className="block text-sm text-muted tnum truncate">
+              {c.balance !== null ? `${money(c.balance)} balance` : 'No balance yet'}{util !== null ? ` · ${util}% used` : ''}{c.minimum_payment ? ` · min ${money(c.minimum_payment)}` : ''}
+            </span>
+          )}
+        </span>
         {c.last4 && <span className="text-sm text-muted tnum">•• {c.last4}</span>}
-      </div>
+        <svg className={`shrink-0 text-muted transition-transform ${open ? 'rotate-180' : ''}`} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        <span className="sr-only">{open ? 'Hide details' : 'Show details'}</span>
+      </button>
 
       {upcoming && (
         <div className={`flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 text-sm ${upcoming.status === 'paid' ? 'bg-pay-soft text-pay-ink' : upcoming.status === 'overdue' ? 'bg-bad/10 text-bad' : 'bg-surface-2'}`}>
@@ -257,6 +270,7 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
         </div>
       )}
 
+      {open && (<div id={`${pre}-details`} className="flex flex-col gap-3.5">
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
         <Field id={`${pre}-due`} label="Due day" value={c.due_day} kind="number"
           onCommit={(v) => { const n = parseInt(v, 10); if (n >= 1 && n <= 31) void save({ due_day: n }) }} />
@@ -292,6 +306,7 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
         </label>
         <Swatches value={c.color} onPick={(hex) => void save({ color: hex })} />
       </div>
+      </div>)}
     </div>
   )
 }
