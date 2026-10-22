@@ -55,10 +55,26 @@ export interface Trip {
   people: string[]
   items: TripItem[]
   packing: PackingItem[]
+  cover: TripCover
 }
 
-export interface TripsData { people: Person[]; trips: Trip[] }
-export const EMPTY_TRIPS: TripsData = { people: [], trips: [] }
+/** The trip's cover: one of your photos, a place photo from Unsplash, or nothing yet. */
+export interface TripCover {
+  kind: 'photo' | 'stock' | null
+  photo_id: string | null
+  url: string | null
+  thumb_url: string | null
+  credit_name: string | null
+  credit_link: string | null
+}
+
+export interface TripPhoto {
+  id: string; trip_id: string; path: string; thumb_path: string; taken_on: string | null; caption: string | null
+  width: number | null; height: number | null; created_at: string
+}
+
+export interface TripsData { people: Person[]; trips: Trip[]; photos: TripPhoto[] }
+export const EMPTY_TRIPS: TripsData = { people: [], trips: [], photos: [] }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 
@@ -76,7 +92,12 @@ export async function loadTrips(): Promise<TripsData> {
   ])
   if (people.error) throw people.error
   if (trips.error) throw trips.error
-  type Raw = Omit<Trip, 'people' | 'items' | 'packing' | 'budget'> & {
+  // Photos come from 06_trip_photos.sql; until that's run there are simply none
+  const photos = await supabase.from('trip_photos').select('id, trip_id, path, thumb_path, taken_on, caption, width, height, created_at')
+    .order('taken_on', { ascending: true, nullsFirst: false }).order('created_at')
+  type Raw = Omit<Trip, 'people' | 'items' | 'packing' | 'budget' | 'cover'> & {
+    cover_kind?: 'photo' | 'stock' | null; cover_photo_id?: string | null; cover_url?: string | null; cover_thumb_url?: string | null
+    cover_credit_name?: string | null; cover_credit_link?: string | null
     budget: unknown
     trip_travelers: { person_id: string }[]
     trip_items: (Omit<TripItem, 'people' | 'cost' | 'alternates'> & { cost: unknown; alternates: unknown; trip_item_travelers: { person_id: string }[] })[]
@@ -95,7 +116,12 @@ export async function loadTrips(): Promise<TripsData> {
         people: (i.trip_item_travelers ?? []).map((x) => x.person_id),
       })).sort(sortItems),
       packing: (t.packing_items ?? []).slice().sort((a, b) => a.sort - b.sort || a.text.localeCompare(b.text)),
+      cover: {
+        kind: t.cover_kind ?? null, photo_id: t.cover_photo_id ?? null, url: t.cover_url ?? null, thumb_url: t.cover_thumb_url ?? null,
+        credit_name: t.cover_credit_name ?? null, credit_link: t.cover_credit_link ?? null,
+      },
     })),
+    photos: photos.error ? [] : (photos.data ?? []) as TripPhoto[],
   }
 }
 
@@ -195,6 +221,10 @@ export async function updateTrip(id: string, patch: Partial<Pick<Trip, 'name' | 
 }
 
 export async function deleteTrip(id: string): Promise<void> {
+  // Remove the trip's photo files too (the rows go with the trip)
+  const pics = await supabase.from('trip_photos').select('path, thumb_path').eq('trip_id', id)
+  const files = (pics.data ?? []).flatMap((p) => [p.path, p.thumb_path])
+  if (files.length) await supabase.storage.from('trip-photos').remove(files)
   await ok(supabase.from('trips').delete().eq('id', id))
 }
 

@@ -3,7 +3,7 @@
 // Two ways in:
 //   1. CloudMailin posts each forwarded email here (JSON Normalized format). It proves itself
 //      with ?key=INBOX_SECRET in the URL (or the same secret as a basic-auth password).
-//   2. The Runway app posts a pasted email, asks to read one again, or asks for gift ideas, signed in as Jae.
+//   2. The Runway app posts a pasted email, asks to read one again, asks for gift ideas, or looks up trip cover photos, signed in as Jae.
 //
 // Each email is saved, then Claude reads it and says what it is. Shipping, delay and delivery
 // updates for an order already in Runway are applied right away. Anything new (an order,
@@ -13,6 +13,7 @@
 //   ANTHROPIC_API_KEY   your Claude API key
 //   INBOX_SECRET        a long random password, also put in the CloudMailin URL
 //   FORWARD_FROM        your email address(es) that forward to Runway, comma separated
+//   UNSPLASH_ACCESS_KEY trip cover photos from Unsplash
 // Optional: ANTHROPIC_MODEL (default claude-haiku-5-5)
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically and never leave the server.
 
@@ -150,6 +151,28 @@ Deno.serve(async (req) => {
     } catch (e) {
       return reply({ error: e instanceof Error ? e.message : String(e) }, 502)
     }
+  }
+
+  if (payload.action === 'cover_search') {
+    try { return reply({ photos: await unsplashSearch(String(payload.query ?? '')) }) } catch (e) { return reply({ error: e instanceof Error ? e.message : String(e) }, 502) }
+  }
+
+  if (payload.action === 'cover_pick') {
+    const trip = await db.from('trips').select('id').eq('id', String(payload.trip_id ?? '')).eq('user_id', owner).maybeSingle()
+    if (!trip.data) return reply({ error: 'Trip not found' }, 404)
+    const p = (payload.photo ?? {}) as Record<string, unknown>
+    const ok = (u: unknown) => typeof u === 'string' && /^https:\/\/(images|plus)\.unsplash\.com\//.test(u)
+    if (!ok(p.regular) || !ok(p.thumb)) return reply({ error: 'That photo did not come from Unsplash' }, 400)
+    // Unsplash asks apps to tell them when a photo is used
+    if (typeof p.download_location === 'string' && p.download_location.startsWith(UNSPLASH_BASE)) {
+      await fetch(p.download_location, { headers: { Authorization: `Client-ID ${env('UNSPLASH_ACCESS_KEY')}` } }).catch(() => null)
+    }
+    const up = await db.from('trips').update({
+      cover_kind: 'stock', cover_photo_id: null, cover_url: p.regular, cover_thumb_url: p.thumb,
+      cover_credit_name: isText(p.credit_name), cover_credit_link: isText(p.credit_link),
+    }).eq('id', trip.data.id)
+    if (up.error) return reply({ error: up.error.message }, 500)
+    return reply({ ok: true })
   }
 
   return reply({ error: 'Unknown action' }, 400)
@@ -735,4 +758,32 @@ async function giftIdeas(d: SpecialDate, today: string): Promise<GiftIdea[]> {
   })).filter((g) => g.title && g.price > 0 && g.price <= GIFT_BUDGET)
   if (ideas.length === 0) throw new Error('No ideas came back. Try again.')
   return ideas.slice(0, 5)
+}
+
+// ---------------------------------------------------------------------------
+// Trip cover photos from Unsplash (the key stays here, never in the app)
+// ---------------------------------------------------------------------------
+
+const UNSPLASH_BASE = (env('UNSPLASH_BASE') || 'https://api.unsplash.com').replace(/\/$/, '')
+const UTM = 'utm_source=jaes_runway&utm_medium=referral'
+
+async function unsplashSearch(query: string) {
+  const key = env('UNSPLASH_ACCESS_KEY')
+  if (!key) throw new Error('UNSPLASH_ACCESS_KEY is not set in Supabase secrets')
+  const q = query.trim().slice(0, 100)
+  if (!q) throw new Error('Type a place to search for')
+  const res = await fetch(`${UNSPLASH_BASE}/search/photos?query=${encodeURIComponent(q)}&per_page=9&orientation=landscape&content_filter=high`, {
+    headers: { Authorization: `Client-ID ${key}`, 'Accept-Version': 'v1' },
+  })
+  if (!res.ok) throw new Error(`Unsplash ${res.status}: ${(await res.text().catch(() => '')).slice(0, 160)}`)
+  const out = await res.json() as { results?: Record<string, any>[] }
+  return (out.results ?? []).map((r) => ({
+    id: String(r.id),
+    thumb: String(r.urls?.small ?? ''),
+    regular: String(r.urls?.regular ?? ''),
+    alt: String(r.alt_description ?? r.description ?? q),
+    credit_name: String(r.user?.name ?? 'Unsplash'),
+    credit_link: `${String(r.user?.links?.html ?? 'https://unsplash.com')}?${UTM}`,
+    download_location: String(r.links?.download_location ?? ''),
+  })).filter((r) => r.thumb && r.regular)
 }

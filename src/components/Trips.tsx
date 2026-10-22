@@ -1,3 +1,5 @@
+import { CoverBanner, CoverImg, DayPhotos, PhotoAlbum } from './TripPhotos'
+import { coverOf } from '../lib/tripPhotos'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { DAYS, dateOf, daysBetween, money, shortDate } from '../lib/dates'
 import { parseMoney } from '../lib/money'
@@ -134,7 +136,9 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
 }
 
 /** For a day panel: the trip you're on that day, plus anything scheduled. */
-export function DayTrips({ date, data, reload, onOpenTrip }: { date: string; data: TripsData; reload: Reload; onOpenTrip: (id: string) => void }) {
+export type OpenTrip = (id: string, section?: 'photos') => void
+
+export function DayTrips({ date, data, reload, onOpenTrip }: { date: string; data: TripsData; reload: Reload; onOpenTrip: OpenTrip }) {
   const items = itemsOn(data, date)
   const on = data.trips.filter((t) => t.start_date && t.end_date && t.start_date <= date && date <= t.end_date && t.status !== 'idea')
   if (!items.length && !on.length) return null
@@ -155,6 +159,9 @@ export function DayTrips({ date, data, reload, onOpenTrip }: { date: string; dat
             {items.filter((x) => x.trip.id === id).map((x) => (
               <ItemCard key={`${x.item.id}:${x.part}`} trip={t} item={x.item} part={x.part} data={data} reload={reload} />
             ))}
+            {t.start_date && t.end_date && t.start_date <= date && date <= t.end_date && (
+              <DayPhotos trip={t} date={date} data={data} reload={reload} onOpenAlbum={() => onOpenTrip(id, 'photos')} />
+            )}
           </div>
         )
       })}
@@ -163,7 +170,7 @@ export function DayTrips({ date, data, reload, onOpenTrip }: { date: string; dat
 }
 
 /** Phone Home: next trip with its flight, hotel and car (from your drawing). */
-export function TravelCard({ today, data, onOpenTrip, onPlan }: { today: string; data: TripsData; onOpenTrip: (id: string) => void; onPlan: () => void }) {
+export function TravelCard({ today, data, onOpenTrip, onPlan }: { today: string; data: TripsData; onOpenTrip: OpenTrip; onPlan: () => void }) {
   const t = nextTrip(data, today)
   if (!t) {
     return (
@@ -177,8 +184,14 @@ export function TravelCard({ today, data, onOpenTrip, onPlan }: { today: string;
   const first = (k: ItemKind) => t.items.find((i) => i.kind === k)
   const legs = (['flight', 'hotel', 'car'] as ItemKind[]).map(first).filter((i): i is TripItem => Boolean(i))
   const days = daysBetween(today, t.start_date!)
+  const cover = coverOf(t, data.photos)
   return (
-    <section aria-label="Travel plans" className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-2.5">
+    <section aria-label="Travel plans" className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-2.5 overflow-hidden">
+      {cover && (
+        <button type="button" onClick={() => onOpenTrip(t.id)} aria-label={`Open ${t.name}`} className="-mx-4 -mt-4 mb-1 h-32 border-0 p-0 cursor-pointer bg-accent-soft">
+          <CoverImg cover={cover} big className="w-full h-full" />
+        </button>
+      )}
       <div className="flex items-center justify-between">
         <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-muted">Travel plans</h2>
         <span className="text-sm font-bold text-accent">{days > 1 ? `in ${days} days` : days === 1 ? 'tomorrow' : 'now'}</span>
@@ -195,7 +208,7 @@ export function TravelCard({ today, data, onOpenTrip, onPlan }: { today: string;
 }
 
 /** Phone Home while you're away: today's part of the trip goes to the top. */
-export function TripModeCard({ today, data, reload, onOpenTrip }: { today: string; data: TripsData; reload: Reload; onOpenTrip: (id: string) => void }) {
+export function TripModeCard({ today, data, reload, onOpenTrip }: { today: string; data: TripsData; reload: Reload; onOpenTrip: OpenTrip }) {
   const t = activeTrip(data, today)
   if (!t) return null
   const n = tripDayNumber(t, today)
@@ -209,6 +222,7 @@ export function TripModeCard({ today, data, reload, onOpenTrip }: { today: strin
       <b className="text-xl">Today in {t.name}</b>
       {items.length === 0 && <p className="m-0 text-sm text-muted">Nothing booked today. Enjoy it.</p>}
       {items.map((x) => <ItemCard key={`${x.item.id}:${x.part}`} trip={t} item={x.item} part={x.part} data={data} reload={reload} />)}
+      <DayPhotos trip={t} date={today} data={data} reload={reload} onOpenAlbum={() => onOpenTrip(t.id, 'photos')} />
     </section>
   )
 }
@@ -217,13 +231,13 @@ export function TripModeCard({ today, data, reload, onOpenTrip }: { today: strin
 // Trips tab
 // ---------------------------------------------------------------------------
 
-export default function TripsView({ today, data, loaded, error, reload, openId, onOpen }: {
-  today: string; data: TripsData; loaded: boolean; error: string; reload: Reload; openId: string | null; onOpen: (id: string | null) => void
+export default function TripsView({ today, data, loaded, error, reload, openId, onOpen, focusPhotos }: {
+  today: string; data: TripsData; loaded: boolean; error: string; reload: Reload; openId: string | null; onOpen: (id: string | null) => void; focusPhotos?: boolean
 }) {
   const [creating, setCreating] = useState(false)
   if (!loaded) return <main className="flex-1 safe-x py-5 text-muted">Loading…</main>
   const open = openId ? data.trips.find((t) => t.id === openId) : undefined
-  if (open) return <TripDetail trip={open} today={today} data={data} reload={reload} onBack={() => onOpen(null)} />
+  if (open) return <TripDetail trip={open} today={today} data={data} reload={reload} onBack={() => onOpen(null)} focusPhotos={focusPhotos} />
 
   const upcoming = data.trips.filter((t) => t.start_date && t.end_date && t.end_date >= today && t.status !== 'done')
   const ideas = data.trips.filter((t) => !t.start_date || !t.end_date)
@@ -254,12 +268,15 @@ function TripGroup({ title, trips, today, data, onOpen, empty }: { title: string
       {trips.map((t) => {
         const flies = t.items.some((i) => i.kind === 'flight')
         const days = t.start_date ? daysBetween(today, t.start_date) : null
+        const cover = coverOf(t, data.photos)
         return (
           <button key={t.id} type="button" onClick={() => onOpen(t.id)}
             className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-3.5 text-left text-fg cursor-pointer hover:border-accent-hi">
-            <span className="size-11 rounded-xl bg-accent-soft text-accent grid place-items-center shrink-0">
-              {flies ? <PlaneIcon size={22} /> : t.is_international ? <GlobeIcon size={22} /> : <CarIcon size={22} />}
-            </span>
+            {cover ? <CoverImg cover={cover} className="size-14 rounded-xl shrink-0" /> : (
+              <span className="size-11 rounded-xl bg-accent-soft text-accent grid place-items-center shrink-0">
+                {flies ? <PlaneIcon size={22} /> : t.is_international ? <GlobeIcon size={22} /> : <CarIcon size={22} />}
+              </span>
+            )}
             <span className="flex-1 min-w-0 flex flex-col gap-1">
               <b className="text-lg truncate">{t.name}</b>
               <span className="text-sm text-muted">
@@ -383,7 +400,7 @@ function BlurField({ id, label, value, type = 'text', onCommit, placeholder, mon
   )
 }
 
-function TripDetail({ trip: t, today, data, reload, onBack }: { trip: Trip; today: string; data: TripsData; reload: Reload; onBack: () => void }) {
+function TripDetail({ trip: t, today, data, reload, onBack, focusPhotos }: { trip: Trip; today: string; data: TripsData; reload: Reload; onBack: () => void; focusPhotos?: boolean }) {
   const [error, setError] = useState('')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
@@ -405,6 +422,8 @@ function TripDetail({ trip: t, today, data, reload, onBack }: { trip: Trip; toda
       <button type="button" onClick={onBack} className="self-start h-10 inline-flex items-center gap-1 pl-1 pr-3 rounded-xl border-0 bg-transparent text-accent font-bold cursor-pointer">
         <ChevronIcon dir="left" /> All trips
       </button>
+
+      <CoverBanner trip={t} data={data} reload={reload} onOpenAlbum={() => document.getElementById('trip-photos')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} />
 
       {error && <p role="alert" className="m-0 rounded-xl border border-bad bg-bad/10 px-4 py-3 font-bold text-bad">Couldn't save that: {error}</p>}
 
@@ -454,7 +473,7 @@ function TripDetail({ trip: t, today, data, reload, onBack }: { trip: Trip; toda
         {!t.start_date && t.items.length === 0 && !adding && <p className="m-0 text-muted">Still an idea. Add dates above when you're ready, then flights, a hotel and plans.</p>}
         {t.start_date && t.items.length === 0 && !adding && <p className="m-0 text-muted">Nothing booked yet. Add your flights, hotel, car or a drive.</p>}
         {[...days, ...(outside.length ? ['outside'] : [])].map((k, idx) => {
-          const list = k === 'outside' ? outside.map((i) => ({ item: i, part: 'start' as const })) : itemsOn({ people: data.people, trips: [t] }, k).map((x) => ({ item: x.item, part: x.part }))
+          const list = k === 'outside' ? outside.map((i) => ({ item: i, part: 'start' as const })) : itemsOn({ people: data.people, trips: [t], photos: [] }, k).map((x) => ({ item: x.item, part: x.part }))
           if (!list.length) return null
           return (
             <div key={k} className="flex flex-col gap-2">
@@ -470,6 +489,8 @@ function TripDetail({ trip: t, today, data, reload, onBack }: { trip: Trip; toda
           )
         })}
       </section>
+
+      <PhotoAlbum trip={t} data={data} reload={reload} focus={focusPhotos} />
 
       <Packing trip={t} run={run} />
 
@@ -676,7 +697,7 @@ function ItemForm({ trip: t, data, today, reload, initial, onDone }: {
                 className="self-start bg-transparent border-0 p-0 text-accent text-sm font-bold underline cursor-pointer">+ Add a backup flight</button>
             </div>
           )}
-          <PeoplePicker data={{ people: data.people.filter((p) => t.people.includes(p.id) || people.includes(p.id)), trips: [] }} value={people}
+          <PeoplePicker data={{ people: data.people.filter((p) => t.people.includes(p.id) || people.includes(p.id)), trips: [], photos: [] }} value={people}
             onToggle={(pid, on) => setPeople(on ? [...people, pid] : people.filter((x) => x !== pid))} label="Who's on this flight" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Labeled id={`if-conf-${id}`} label={pass === 'award' ? 'Confirmation / certificate #' : 'Confirmation'}><input id={`if-conf-${id}`} value={conf} onChange={(e) => setConf(e.target.value)} className={`${inputCls} uppercase`} autoComplete="off" /></Labeled>

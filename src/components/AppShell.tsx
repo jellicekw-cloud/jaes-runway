@@ -120,7 +120,9 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     ])
   }
 
-  function openTrip(id: string | null) {
+  const [tripPhotosFocus, setTripPhotosFocus] = useState(false)
+  function openTrip(id: string | null, section?: 'photos') {
+    setTripPhotosFocus(section === 'photos')
     setOpenTripId(id)
     if (isPhone) setPhoneTab('trips')
     else setTab('trips')
@@ -137,7 +139,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       <DayPlans date={date} today={today} plans={plans} reload={reloadPlans} showAdd={showAdd} />
     </>
   )
-  const tripsView = <TripsView today={today} data={trips} loaded={tripsLoaded} error={tripsError} reload={reloadTrips} openId={openTripId} onOpen={(id) => { setOpenTripId(id); window.scrollTo({ top: 0 }) }} />
+  const tripsView = <TripsView today={today} data={trips} loaded={tripsLoaded} error={tripsError} reload={reloadTrips} openId={openTripId} onOpen={(id) => { setTripPhotosFocus(false); setOpenTripId(id); window.scrollTo({ top: 0 }) }} focusPhotos={tripPhotosFocus} />
 
   function showToast(message: string) {
     setToast(message)
