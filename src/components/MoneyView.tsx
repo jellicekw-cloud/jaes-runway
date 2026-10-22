@@ -14,10 +14,11 @@ interface Props {
   reloadMoney: () => Promise<void>
   onLog: () => void
   onMoneyIn?: () => void
+  afford?: ReactNode
 }
 
 /** Money tab: checking balances, savings challenge, paycheck split, spending log. */
-export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog, onMoneyIn }: Props) {
+export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog, onMoneyIn, afford }: Props) {
   const [error, setError] = useState('')
 
   async function run(change: () => Promise<unknown>) {
@@ -121,6 +122,8 @@ export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog,
           </div>
         </div>
       </Section>
+
+      {afford}
 
       <MoneyInSection m={m} today={today} reloadMoney={reloadMoney} onAdd={onMoneyIn ?? onLog} />
 

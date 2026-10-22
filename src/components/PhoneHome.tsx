@@ -28,11 +28,12 @@ interface Props {
   orders?: Order[]
   dates?: SpecialDate[]
   datesRow?: ReactNode     // slim birthdays row (when nothing is this week)
+  afford?: ReactNode       // Can I afford it?
   dayExtra?: (date: string, showAdd?: boolean) => ReactNode
 }
 
 /** Phone Home: balances, savings challenge, next 3 days, 3-day journal. */
-export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, top, bottom, plans, trips, orders = [], dates = [], datesRow, dayExtra }: Props) {
+export default function PhoneHome({ userId, today, money: m, moneyLoaded, reloadMoney, extra, top, bottom, plans, trips, orders = [], dates = [], datesRow, afford, dayExtra }: Props) {
   const days = [0, 1, 2].map((i) => addDays(today, i))
   const [journal, setJournal] = useState<JournalEntry[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -97,6 +98,8 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
           <span>{np ? `Next payday ${shortDate(np.date)}` : ''}</span>
         </div>
       </section>
+
+      {afford}
 
       {/* Savings */}
       {m.challenge && (

@@ -38,6 +38,7 @@ interface Props {
   dates: SpecialDate[]
   homeDates?: ReactNode   // birthdays row when nothing is this week
   onBell?: () => void
+  homeAfford?: ReactNode
 }
 
 /** Phone layout: greeting bar on top, one screen at a time, tab bar with the + button at the bottom. */
@@ -89,7 +90,7 @@ export default function PhoneShell(p: Props) {
       <main className="flex-1 safe-x pt-3.5 flex flex-col" style={{ paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))' }}>
         {tab === 'home' && (
           <PhoneHome userId={userId} today={today} money={money} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
-            extra={p.homeExtra} top={p.homeTop} bottom={p.homeBottom} plans={p.plans} trips={p.trips} orders={p.orders} dates={p.dates} datesRow={p.homeDates} dayExtra={p.dayExtra} />
+            extra={p.homeExtra} top={p.homeTop} bottom={p.homeBottom} plans={p.plans} trips={p.trips} orders={p.orders} dates={p.dates} datesRow={p.homeDates} afford={p.homeAfford} dayExtra={p.dayExtra} />
         )}
         {tab === 'calendar' && (
           <MonthView userId={userId} today={today} selected={selected} onSelect={setSelected} money={money} reloadMoney={reloadMoney}
