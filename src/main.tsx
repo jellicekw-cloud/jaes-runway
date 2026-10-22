@@ -8,3 +8,8 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
+
+// Phone notifications need a service worker (it only shows notifications; it doesn't cache the app)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => { /* notifications just won't be offered */ }) })
+}

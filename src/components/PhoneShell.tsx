@@ -11,6 +11,7 @@ import MonthView from './MonthView'
 import BillsView from './BillsView'
 import MoneyView from './MoneyView'
 import JournalSearch from './JournalSearch'
+import { BellButton } from './Notifications'
 import { CalendarIcon, HomeIcon, PlaneIcon, Plus, Search, SignOut, WalletIcon } from './icons'
 
 export type PhoneTab = 'home' | 'calendar' | 'trips' | 'money'
@@ -36,6 +37,7 @@ interface Props {
   orders: Order[]
   dates: SpecialDate[]
   homeDates?: ReactNode   // birthdays row when nothing is this week
+  onBell?: () => void
 }
 
 /** Phone layout: greeting bar on top, one screen at a time, tab bar with the + button at the bottom. */
@@ -66,6 +68,7 @@ export default function PhoneShell(p: Props) {
           </div>
           <button type="button" aria-label={searching ? 'Close search' : 'Search journal'} aria-pressed={searching} onClick={() => setSearching(!searching)}
             className="size-11 rounded-full border-0 bg-header-2 text-white grid place-items-center cursor-pointer"><Search /></button>
+          {p.onBell && <BellButton onClick={p.onBell} />}
           <button type="button" aria-label="Sign out" onClick={() => supabase.auth.signOut()}
             className="size-11 rounded-full border-0 bg-header-2 text-header-muted grid place-items-center cursor-pointer"><SignOut /></button>
         </div>

@@ -63,4 +63,5 @@ supabase/
 10. ✅ Money in: side work (expected 15th and 30th into SoFi, confirm with "It landed"), Zelle (NFCU), refunds, gifts; + Add → Money in; counted in balance estimates; Money tab totals (in vs out this month); Inbox turns Zelle / deposit emails into Money in cards (payroll is skipped). Setup: run supabase/05_money_in.sql, then re-paste the runway-inbox function
 11. ✅ Trip photos: private album per trip (shrunk on the phone, sorted by the day taken), viewer with captions / move day / delete, cover from Unsplash or your own photo, covers on the Trips list and Home, photos on trip days. Setup: PHOTOS_SETUP.md
 12. ✅ Trip costs with a pay-on day (hotel, car, tours; not flights) count in Due before payday; order cards log the purchase as spending (Paid with: account, card, or don't log)
+13. ✅ Phone notifications (Android/Chrome): 7 am summary, Inbox right away, bills the evening before, side work check; quiet hours; 🔔 panel with switches. Setup: ALERTS_SETUP.md
 8. Later: alerts, "ask it" (can I afford this?), confirmation-email import

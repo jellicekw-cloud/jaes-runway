@@ -18,6 +18,7 @@
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically and never leave the server.
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
+import webpush from 'npm:web-push@3.6.7'
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined
 
@@ -91,6 +92,8 @@ Deno.serve(async (req) => {
 
   // 1. From CloudMailin
   if (secretOk(req, url)) {
+    // The every-5-minutes schedule (07b_alerts_schedule.sql) knocks here
+    if (payload.action === 'alerts_tick') return reply(await alertsTick(db, owner, env('RUNWAY_TEST_PUSH') === '1' ? String(payload.now ?? '') : ''))
     const mail = parseCloudMailin(payload)
     const check = senderCheck(mail)
     if (check === 'no') return reply({ ignored: true, reason: 'not forwarded by you' })   // 200 so it isn't retried
@@ -104,7 +107,8 @@ Deno.serve(async (req) => {
       return reply({ error: ins.error.message }, 500)   // CloudMailin will try again later
     }
     const row = ins.data as EmailRow
-    const work = check === 'confirm' ? gmailConfirmation(db, row) : readEmail(db, owner, row)
+    const work = check === 'confirm' ? gmailConfirmation(db, row)
+      : readEmail(db, owner, row).then((o) => (o.status === 'review' || o.status === 'unsure' ? notifyInbox(db, owner).catch(() => null) : null))
     if (typeof EdgeRuntime !== 'undefined') { EdgeRuntime.waitUntil(work); return reply({ ok: true, id: row.id }) }
     await work
     return reply({ ok: true, id: row.id })
@@ -151,6 +155,29 @@ Deno.serve(async (req) => {
     } catch (e) {
       return reply({ error: e instanceof Error ? e.message : String(e) }, 502)
     }
+  }
+
+  if (payload.action === 'push_key') return reply({ publicKey: (await pushKeys(db)).publicKey })
+
+  if (payload.action === 'push_subscribe') {
+    const sub = (payload.subscription ?? {}) as { endpoint?: string; keys?: { p256dh?: string; auth?: string } }
+    const okUrl = sub.endpoint?.startsWith('https://') || (env('RUNWAY_TEST_PUSH') === '1' && sub.endpoint?.startsWith('http://localhost'))
+    if (!okUrl || !sub.keys?.p256dh || !sub.keys?.auth) return reply({ error: 'That phone did not give a usable subscription' }, 400)
+    const up = await db.from('push_subscriptions').upsert({
+      user_id: owner, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth, device: isText(payload.device),
+    }, { onConflict: 'endpoint' })
+    if (up.error) return reply({ error: up.error.message }, 500)
+    return reply({ ok: true })
+  }
+
+  if (payload.action === 'push_unsubscribe') {
+    await db.from('push_subscriptions').delete().eq('user_id', owner).eq('endpoint', String(payload.endpoint ?? ''))
+    return reply({ ok: true })
+  }
+
+  if (payload.action === 'push_test') {
+    const n = await sendPush(db, owner, { title: '🎉 Runway notifications are on', body: 'You\'ll get your morning summary at 7, plus Inbox, bill and side work alerts.', url: '/' })
+    return reply({ sent: n })
   }
 
   if (payload.action === 'cover_search') {
@@ -786,4 +813,240 @@ async function unsplashSearch(query: string) {
     credit_link: `${String(r.user?.links?.html ?? 'https://unsplash.com')}?${UTM}`,
     download_location: String(r.links?.download_location ?? ''),
   })).filter((r) => r.thumb && r.regular)
+}
+
+// ---------------------------------------------------------------------------
+// Phone notifications
+// ---------------------------------------------------------------------------
+
+interface Push { title: string; body: string; url?: string; tag?: string }
+
+/** Signing keys for notifications. Made once and kept in app_keys (the server is the only one that can read it). */
+async function pushKeys(db: SupabaseClient): Promise<{ publicKey: string; privateKey: string }> {
+  const { data } = await db.from('app_keys').select('name, value').in('name', ['vapid_public', 'vapid_private'])
+  const get = (n: string) => (data ?? []).find((r: { name: string }) => r.name === n)?.value as string | undefined
+  if (get('vapid_public') && get('vapid_private')) return { publicKey: get('vapid_public')!, privateKey: get('vapid_private')! }
+  const k = webpush.generateVAPIDKeys()
+  await db.from('app_keys').upsert([{ name: 'vapid_public', value: k.publicKey }, { name: 'vapid_private', value: k.privateKey }], { onConflict: 'name', ignoreDuplicates: true })
+  const again = await db.from('app_keys').select('name, value').in('name', ['vapid_public', 'vapid_private'])
+  const v = (n: string) => (again.data ?? []).find((r: { name: string }) => r.name === n)?.value as string
+  return { publicKey: v('vapid_public'), privateKey: v('vapid_private') }
+}
+
+/** Sends to every phone you turned notifications on for. Phones that unsubscribed are forgotten. */
+async function sendPush(db: SupabaseClient, owner: string, msg: Push): Promise<number> {
+  const subs = await db.from('push_subscriptions').select('id, endpoint, p256dh, auth').eq('user_id', owner)
+  if (!subs.data?.length) return 0
+  const keys = await pushKeys(db)
+  let sent = 0
+  for (const s of subs.data as { id: string; endpoint: string; p256dh: string; auth: string }[]) {
+    let d: ReturnType<typeof webpush.generateRequestDetails>
+    try {
+      d = webpush.generateRequestDetails({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(msg), {
+        TTL: 6 * 3600, urgency: 'normal', vapidDetails: { subject: 'mailto:runway@jaesrunway.app', publicKey: keys.publicKey, privateKey: keys.privateKey },
+      })
+    } catch {
+      await db.from('push_subscriptions').delete().eq('id', s.id)   // broken keys never work: forget it
+      continue
+    }
+    try {
+      const res = await fetch(d.endpoint, { method: d.method, headers: d.headers as Record<string, string>, body: d.body })
+      if (res.status === 404 || res.status === 410) await db.from('push_subscriptions').delete().eq('id', s.id)
+      else if (res.ok) { sent++; await db.from('push_subscriptions').update({ last_ok_at: new Date().toISOString() }).eq('id', s.id) }
+    } catch { /* one bad phone shouldn't stop the others */ }
+  }
+  return sent
+}
+
+/** Logs the alert first (so two runs can't both send it). Returns false if it already went out. */
+async function once(db: SupabaseClient, owner: string, key: string, msg?: Push): Promise<boolean> {
+  const r = await db.from('alert_log').insert({ user_id: owner, key, title: msg?.title ?? null, body: msg?.body ?? null })
+  return !r.error
+}
+
+interface AlertSettings {
+  timezone: string; display_name: string; pay_start: string | null; pay_every_days: number
+  alert_morning: boolean; alert_morning_at: string; alert_inbox: boolean; alert_bills: boolean; alert_side_work: boolean
+  quiet_from: string; quiet_until: string
+}
+
+function localNow(tz: string, fake = ''): { date: string; time: string } {
+  if (fake) return { date: fake.slice(0, 10), time: fake.slice(11, 16) }   // tests only: "YYYY-MM-DDTHH:MM"
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date())
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? '00'
+  return { date: `${g('year')}-${g('month')}-${g('day')}`, time: `${g('hour')}:${g('minute')}` }
+}
+const hm = (t: string) => t.slice(0, 5)
+/** Quiet hours can wrap past midnight (22:00 → 07:00). */
+export function isQuiet(time: string, from: string, until: string): boolean {
+  const t = hm(time), f = hm(from), u = hm(until)
+  if (f === u) return false
+  return f < u ? t >= f && t < u : t >= f || t < u
+}
+
+async function alertSettings(db: SupabaseClient, owner: string): Promise<AlertSettings | null> {
+  const { data } = await db.from('settings').select('timezone, display_name, pay_start, pay_every_days, alert_morning, alert_morning_at, alert_inbox, alert_bills, alert_side_work, quiet_from, quiet_until')
+    .eq('user_id', owner).maybeSingle()
+  return data as AlertSettings | null
+}
+
+/** New Inbox cards → one notification (held during quiet hours, sent after). */
+async function notifyInbox(db: SupabaseClient, owner: string, fakeNow = ''): Promise<number> {
+  const s = await alertSettings(db, owner)
+  if (!s?.alert_inbox) return 0
+  const now = localNow(s.timezone || 'America/New_York', fakeNow)
+  if (isQuiet(now.time, s.quiet_from, s.quiet_until)) return 0
+  const since = new Date(Date.now() - 3 * 86400000).toISOString()
+  const waiting = await db.from('inbox_emails').select('id, summary, subject, kind').eq('user_id', owner).in('status', ['review', 'unsure']).gte('created_at', since).order('created_at')
+  const rows = (waiting.data ?? []) as { id: string; summary: string | null; subject: string | null; kind: string | null }[]
+  if (!rows.length) return 0
+  const logged = await db.from('alert_log').select('key').eq('user_id', owner).in('key', rows.map((r) => `inbox:${r.id}`))
+  const done = new Set((logged.data ?? []).map((r: { key: string }) => r.key))
+  const fresh = rows.filter((r) => !done.has(`inbox:${r.id}`) && r.kind !== 'gmail_confirm')
+  if (!fresh.length) return 0
+  const mine: typeof fresh = []
+  for (const r of fresh) if (await once(db, owner, `inbox:${r.id}`)) mine.push(r)
+  if (!mine.length) return 0
+  const line = (r: typeof mine[number]) => r.summary || r.subject || 'New email'
+  return sendPush(db, owner, {
+    title: mine.length === 1 ? '✉ New in your Runway Inbox' : `✉ ${mine.length} new in your Runway Inbox`,
+    body: mine.length === 1 ? line(mine[0]) : mine.slice(0, 3).map(line).join('\n'),
+    url: '/?open=inbox', tag: 'inbox',
+  })
+}
+
+// --- dates (server copies of the app's rules) ---
+const lastDay = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate()
+function dueOn(day: number, key: string): boolean {
+  const [y, m, d] = key.split('-').map(Number)
+  return d === Math.min(day, lastDay(y, m))
+}
+const diffDays = (a: string, b: string) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000)
+const money$ = (n: number) => `$${n.toFixed(2).replace(/\.00$/, '')}`
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const wd = (key: string) => WEEKDAY[new Date(key + 'T12:00:00Z').getUTCDay()]
+
+interface DueItem { name: string; amount: number | null; date: string }
+
+/** Cards, other bills and Afterpay payments due on these days that aren't marked paid. */
+async function unpaidDue(db: SupabaseClient, owner: string, days: string[]): Promise<DueItem[]> {
+  const from = days.reduce((a, b) => (a < b ? a : b))
+  const [cards, bills, orders, pays] = await Promise.all([
+    db.from('cards').select('id, name, due_day, minimum_payment, tracking_since').eq('user_id', owner).eq('is_active', true),
+    db.from('bills').select('id, name, due_day, amount, tracking_since').eq('user_id', owner).eq('is_active', true),
+    db.from('afterpay_orders').select('id, name, total, order_date, installments, interval_days').eq('user_id', owner),
+    db.from('payments').select('card_id, bill_id, afterpay_order_id, installment_no, due_date').eq('user_id', owner).gte('due_date', from),
+  ])
+  const paid = (pays.data ?? []) as { card_id: string | null; bill_id: string | null; afterpay_order_id: string | null; installment_no: number | null; due_date: string }[]
+  const out: DueItem[] = []
+  for (const k of days) {
+    for (const c of (cards.data ?? []) as { id: string; name: string; due_day: number; minimum_payment: number | null; tracking_since: string }[]) {
+      if (k >= c.tracking_since && dueOn(c.due_day, k) && !paid.some((p) => p.card_id === c.id && p.due_date === k)) out.push({ name: c.name, amount: c.minimum_payment === null ? null : Number(c.minimum_payment), date: k })
+    }
+    for (const b of (bills.data ?? []) as { id: string; name: string; due_day: number; amount: number | null; tracking_since: string }[]) {
+      if (k >= b.tracking_since && dueOn(b.due_day, k) && !paid.some((p) => p.bill_id === b.id && p.due_date === k)) out.push({ name: b.name, amount: b.amount === null ? null : Number(b.amount), date: k })
+    }
+    for (const o of (orders.data ?? []) as { id: string; name: string; total: number; order_date: string; installments: number; interval_days: number }[]) {
+      for (let n = 1; n <= o.installments; n++) {
+        if (diffDays(o.order_date, k) !== (n - 1) * o.interval_days) continue
+        if (paid.some((p) => p.afterpay_order_id === o.id && p.installment_no === n)) continue
+        const total = Number(o.total)
+        const base = Math.floor((total * 100) / o.installments) / 100
+        out.push({ name: `Afterpay ${o.name}`, amount: n < o.installments ? base : Math.round((total - base * (o.installments - 1)) * 100) / 100, date: k })
+      }
+    }
+  }
+  return out
+}
+const dueText = (items: DueItem[]) => items.map((i) => `${i.name}${i.amount ? ` ${money$(i.amount)}` : ''}`).join(', ')
+
+/** Side work (or any expected deposit) due today that hasn't been confirmed. */
+async function sideWorkWaiting(db: SupabaseClient, owner: string, today: string) {
+  const [srcs, inc] = await Promise.all([
+    db.from('income_sources').select('id, name, days, account_id').eq('user_id', owner).eq('is_active', true),
+    db.from('income').select('income_source_id, expected_on').eq('user_id', owner).eq('expected_on', today),
+  ])
+  const got = new Set(((inc.data ?? []) as { income_source_id: string | null }[]).map((x) => x.income_source_id))
+  return ((srcs.data ?? []) as { id: string; name: string; days: number[]; account_id: string | null }[])
+    .filter((s) => (s.days ?? []).some((d) => dueOn(Number(d), today)) && !got.has(s.id))
+}
+
+async function morningLines(db: SupabaseClient, owner: string, s: AlertSettings, today: string): Promise<string[]> {
+  const lines: string[] = []
+  const back = Array.from({ length: 14 }, (_, i) => addDays(today, -14 + i))
+  const [dueToday, late] = await Promise.all([unpaidDue(db, owner, [today]), unpaidDue(db, owner, back)])
+  if (dueToday.length) lines.push(`💳 Due today: ${dueText(dueToday)}`)
+  if (late.length) lines.push(`⚠️ Not marked paid: ${late.map((i) => `${i.name} (${i.date.slice(5).replace('-', '/')})`).join(', ')}`)
+
+  if (s.pay_start) {
+    const n = diffDays(s.pay_start, today)
+    const every = s.pay_every_days || 14
+    const left = n < 0 ? -n : (every - (n % every)) % every
+    if (left === 0) lines.push('💵 Payday today')
+    else if (left <= 3) lines.push(`💵 Payday ${left === 1 ? 'tomorrow' : `in ${left} days`}`)
+  }
+  const side = await sideWorkWaiting(db, owner, today)
+  if (side.length) lines.push(`💵 ${side.map((x) => x.name).join(', ')} expected today`)
+
+  const orders = await db.from('orders').select('store, status, expected_on').eq('user_id', owner).in('status', ['ordered', 'shipped', 'out_for_delivery', 'delayed'])
+  const coming = ((orders.data ?? []) as { store: string; status: string; expected_on: string | null }[])
+    .filter((o) => o.status === 'out_for_delivery' || (o.expected_on && o.expected_on <= today))
+  if (coming.length) lines.push(`📦 Arriving today: ${[...new Set(coming.map((o) => o.store))].join(', ')}`)
+
+  const trips = await db.from('trips').select('name, start_date, status').eq('user_id', owner).in('start_date', [today, addDays(today, 1)]).neq('status', 'idea')
+  for (const t of (trips.data ?? []) as { name: string; start_date: string }[]) lines.push(`✈️ ${t.name} ${t.start_date === today ? 'starts today' : 'starts tomorrow'}`)
+
+  const dates = await db.from('special_dates').select('kind, name, month, day, year').eq('user_id', owner)
+  const icon: Record<string, string> = { birthday: '🎂', anniversary: '💍', memorial: '🕊️', other: '⭐' }
+  const soon: { when: number; text: string }[] = []
+  for (const d of (dates.data ?? []) as { kind: string; name: string; month: number; day: number; year: number | null }[]) {
+    const next = nextOccurrence(d.month, d.day, today)
+    const n = diffDays(today, next)
+    if (n > 7) continue
+    const age = d.year ? Number(next.slice(0, 4)) - d.year : null
+    const what = d.kind === 'birthday' ? (age ? `${d.name} turns ${age}` : `${d.name}'s birthday`) : d.name
+    soon.push({ when: n, text: `${icon[d.kind] ?? '⭐'} ${what} ${n === 0 ? 'today' : n === 1 ? 'tomorrow' : wd(next)}` })
+  }
+  soon.sort((a, b) => a.when - b.when).forEach((x) => lines.push(x.text))
+
+  const inbox = await db.from('inbox_emails').select('id', { count: 'exact', head: true }).eq('user_id', owner).in('status', ['review', 'unsure'])
+  if (inbox.count) lines.push(`✉ ${inbox.count} waiting in your Inbox`)
+  return lines
+}
+
+/** Runs every few minutes: morning summary, bills due tomorrow (evening), side work check, held Inbox alerts. */
+async function alertsTick(db: SupabaseClient, owner: string, fakeNow = '') {
+  const s = await alertSettings(db, owner)
+  if (!s) return { error: 'Run 07_alerts.sql first' }
+  const subs = await db.from('push_subscriptions').select('id', { count: 'exact', head: true }).eq('user_id', owner)
+  if (!subs.count) return { skipped: 'no phones signed up' }
+  const now = localNow(s.timezone || 'America/New_York', fakeNow)
+  const quiet = isQuiet(now.time, s.quiet_from, s.quiet_until)
+  const did: string[] = []
+
+  if (s.alert_morning && now.time >= hm(s.alert_morning_at) && now.time < '12:00' && !quiet) {
+    if (await once(db, owner, `morning:${now.date}`)) {
+      const lines = await morningLines(db, owner, s, now.date)
+      if (lines.length) { await sendPush(db, owner, { title: `☀️ Good morning, ${s.display_name || 'Jae'}`, body: lines.join('\n'), url: '/?open=home', tag: 'morning' }); did.push('morning') }
+    }
+  }
+
+  if (s.alert_bills && now.time >= '18:00' && !quiet) {
+    const tomorrow = addDays(now.date, 1)
+    const due = await unpaidDue(db, owner, [tomorrow])
+    if (due.length && await once(db, owner, `bills:${tomorrow}`)) {
+      await sendPush(db, owner, { title: '💳 Due tomorrow', body: `${dueText(due)}. Tap to mark paid.`, url: '/?open=bills', tag: 'bills' }); did.push('bills')
+    }
+  }
+
+  if (s.alert_side_work && now.time >= '17:00' && !quiet) {
+    for (const src of await sideWorkWaiting(db, owner, now.date)) {
+      if (await once(db, owner, `side:${src.id}:${now.date}`)) {
+        await sendPush(db, owner, { title: `💵 Did ${src.name.toLowerCase()} land?`, body: 'Tap to confirm what came in.', url: '/?open=home', tag: 'side' }); did.push('side')
+      }
+    }
+  }
+
+  if (!quiet && (await notifyInbox(db, owner, fakeNow))) did.push('inbox')
+  return { ok: true, at: now, quiet, sent: did }
 }

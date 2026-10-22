@@ -19,6 +19,7 @@ import { ArrivingToday, DayPackages, InboxHomeCard, InboxPanel } from './Inbox'
 import { comingUp, loadSpecialDates, type SpecialDate } from '../lib/specialDates'
 import { DatesHomeCard, DatesPanel, DatesPill, DayDates } from './Dates'
 import { BirthdayCelebration } from './Confetti'
+import { BellButton, NotificationsPanel } from './Notifications'
 
 type Tab = 'week' | 'bills' | 'money' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
@@ -46,6 +47,23 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [inboxPaste, setInboxPaste] = useState(false)
   const [dates, setDates] = useState<SpecialDate[]>([])
   const [datesOpen, setDatesOpen] = useState(false)
+  const [notifOpen, setNotifOpen] = useState(false)
+
+  // Tapping a notification opens Runway at the right place (?open=inbox | bills | home)
+  useEffect(() => {
+    const go = (where: string | null) => {
+      if (where === 'inbox') { setInboxPaste(false); setInboxOpen(true) }
+      else if (where === 'bills') { if (window.matchMedia('(max-width: 767px)').matches) setPhoneTab('money'); else setTab('bills') }
+      else if (where === 'home') setPhoneTab('home')
+    }
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('open')) { go(params.get('open')); window.history.replaceState(null, '', window.location.pathname) }
+    const onMsg = (e: MessageEvent) => {
+      if (e.data?.type === 'open' && typeof e.data.url === 'string') go(new URL(e.data.url).searchParams.get('open'))
+    }
+    navigator.serviceWorker?.addEventListener('message', onMsg)
+    return () => navigator.serviceWorker?.removeEventListener('message', onMsg)
+  }, [])
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
   const subsLogged = useRef(false)
@@ -168,6 +186,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
 
   const shared = (
     <>
+      <NotificationsPanel open={notifOpen} onClose={() => setNotifOpen(false)} isPhone={isPhone} />
       <DatesPanel open={datesOpen} onClose={() => setDatesOpen(false)} isPhone={isPhone} today={today} list={dates} reload={reloadDates}
         reloadPlans={reloadPlans} peopleNames={trips.people.map((p) => p.name)} onToast={showToast} />
       <InboxPanel open={inboxOpen} onClose={() => setInboxOpen(false)} isPhone={isPhone} focusPaste={inboxPaste} today={today}
@@ -204,7 +223,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
             <TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
             <ArrivingToday orders={inbox.orders} today={today} reload={reloadInbox} onOpen={() => openInbox()} />
           </>}
-          orders={inbox.orders} dates={dates}
+          orders={inbox.orders} dates={dates} onBell={() => setNotifOpen(true)}
           homeDates={comingSoon ? null : <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
           homeBottom={tripsLoaded ? <TravelCard today={today} data={trips} onOpenTrip={openTrip} onPlan={() => openTrip(null)} /> : null}
           plans={plans} trips={trips} tripsView={tripsView} dayExtra={dayPlans} />
@@ -285,6 +304,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           Add
         </button>
         <JournalSearch onPick={openDay} />
+        <BellButton onClick={() => setNotifOpen(true)} />
         <button type="button" onClick={() => supabase.auth.signOut()}
           className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-header-muted text-sm font-bold cursor-pointer hover:bg-header-2">
           Sign out
