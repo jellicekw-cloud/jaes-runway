@@ -11,3 +11,4 @@ supabase/02_seed.sql
 
 # Personal schedule script (has the reader password)
 supabase/07b_alerts_schedule.sql
+deno.lock
