@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
+import { PaydownCard, PaydownPlan } from './Paydown'
 import { addDays, money, shortDate } from '../lib/dates'
 import {
   type TripCost, addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
@@ -53,6 +54,8 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         </p>
       )}
 
+      <PaydownCard m={m} today={today} tripCosts={tripCosts} reloadMoney={reloadMoney} />
+
       <Section title="Overview">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Card balances" value={money(cardBal)} note={`Across ${m.cards.length} cards`} />
@@ -74,6 +77,10 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
           {m.cards.map((c) => <CardEditor key={c.id} card={c} m={m} today={today} run={run} onOpenDay={onOpenDay} />)}
         </div>
+      </Section>
+
+      <Section title="Paydown plan" id="paydown" right={<span className="font-bold tnum text-pay-ink">highest interest first</span>}>
+        <PaydownPlan m={m} today={today} tripCosts={tripCosts} reloadMoney={reloadMoney} />
       </Section>
 
       <Section title="Afterpay" id="afterpay" right={<span className="font-bold tnum">{money(apLeft)} left</span>}>

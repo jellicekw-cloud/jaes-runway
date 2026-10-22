@@ -47,7 +47,7 @@ export interface CardAnswer {
 interface Debit { date: string; amount: number }
 
 /** Balance day by day for one checking account, from today through `until` (inclusive). */
-function walk(m: MoneyData, a: Account, today: string, until: string, debits: Debit[], trips: TripCost[]) {
+export function walk(m: MoneyData, a: Account, today: string, until: string, debits: Debit[], trips: TripCost[]) {
   const start = estimateBalance(m, a, today).estimate
   if (start === null) return null
   const split = m.splits.find((s) => s.account_id === a.id)?.amount ?? 0
@@ -85,7 +85,7 @@ function walk(m: MoneyData, a: Account, today: string, until: string, debits: De
 const fmt = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
 /** The day before the next payday that comes after `date`. */
-function windowEnd(m: MoneyData, date: string): { end: string; payday: string | null } {
+export function windowEnd(m: MoneyData, date: string): { end: string; payday: string | null } {
   const np = nextPayday(m, addDays(date, 1))
   return np ? { end: addDays(np.date, -1), payday: np.date } : { end: addDays(date, 14), payday: null }
 }

@@ -31,6 +31,7 @@ export interface Settings {
   pay_start: string | null
   pay_every_days: number
   hide_balances: boolean
+  paydown_share?: number   // % of the safe extra to suggest on payday (08_paydown.sql)
 }
 
 export interface Account { id: string; name: string; institution: string | null; kind: 'checking' | 'savings' | 'vault'; balance: number | null; balance_as_of: string | null; role_note: string | null; sort: number }

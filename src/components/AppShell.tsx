@@ -21,6 +21,7 @@ import { DatesHomeCard, DatesPanel, DatesPill, DayDates } from './Dates'
 import { BirthdayCelebration } from './Confetti'
 import { BellButton, NotificationsPanel } from './Notifications'
 import AffordCheck from './AffordCheck'
+import { PaydownCard } from './Paydown'
 
 type Tab = 'week' | 'bills' | 'money' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
@@ -225,7 +226,10 @@ export default function AppShell({ email, userId }: { email: string; userId: str
             <ArrivingToday orders={inbox.orders} today={today} reload={reloadInbox} onOpen={() => openInbox()} />
           </>}
           orders={inbox.orders} dates={dates} onBell={() => setNotifOpen(true)}
-          homeAfford={moneyLoaded ? <AffordCheck m={moneyData} today={today} tripCosts={tripCosts} compact /> : null}
+          homeAfford={moneyLoaded ? <>
+            <PaydownCard m={moneyData} today={today} tripCosts={tripCosts} reloadMoney={reloadMoney} onToast={showToast} />
+            <AffordCheck m={moneyData} today={today} tripCosts={tripCosts} compact />
+          </> : null}
           homeDates={comingSoon ? null : <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
           homeBottom={tripsLoaded ? <TravelCard today={today} data={trips} onOpenTrip={openTrip} onPlan={() => openTrip(null)} /> : null}
           plans={plans} trips={trips} tripsView={tripsView} dayExtra={dayPlans} />
