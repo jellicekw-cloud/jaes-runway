@@ -4,7 +4,7 @@ import { INCOME_KIND_LABEL, installmentAmount, type IncomeKind, type MoneyData }
 import { timeLabel } from '../lib/plans'
 import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
 import {
-  ORDER_STATUS_LABEL, addFromEmail, moneyInDefaults, handled, markDelivered, needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, removeOrder,
+  ORDER_STATUS_LABEL, addFromEmail, defaultPayWith, moneyInDefaults, payWithLabel, handled, markDelivered, needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, removeOrder,
   rereadEmail, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
   type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type Suggestion, type TripItemInfo,
@@ -181,6 +181,7 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
     const order = { ...blankOrder(who), ...(s.order ?? {}) }
     const afterpay = order.paid_with_afterpay || s.afterpay ? { ...blankAfterpay(order.store), ...(s.afterpay ?? {}) } : s.afterpay ?? null
     if (s.afterpay) order.paid_with_afterpay = true
+    if (order.pay_with === undefined) order.pay_with = defaultPayWith(m)
     return { ...s, order, afterpay }
   }
   if (kind === 'afterpay') return { ...s, afterpay: { ...blankAfterpay(s.order?.store ?? who), total: s.order?.total ?? null, ...(s.afterpay ?? {}) } }
@@ -204,6 +205,9 @@ function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData,
     if (o.paid_with_afterpay) {
       const a = s.afterpay
       lines.push(apLine(a?.total ?? o.total, a?.purchased_on ?? o.ordered_on ?? today, a?.first_payment_on ?? a?.purchased_on ?? o.ordered_on))
+    } else {
+      const from = payWithLabel(m, o.pay_with)
+      lines.push(from && o.total ? `Logs ${money(o.total)} spent from ${from}` : from ? 'No total yet, so it won\'t be logged as spending (Edit to add one)' : 'Not logged as spending')
     }
     return lines.filter(Boolean)
   }
@@ -250,7 +254,11 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
     if (kind === 'money_in' && draft.money_in && !draft.money_in.account_id && m.accounts.length) {
       setDraft((d) => ({ ...d, money_in: moneyInDefaults(d.money_in!, m) }))
     }
-  }, [kind, draft.money_in, m])
+    if (kind === 'order' && draft.order && !draft.order.pay_with && draft.order.pay_with !== 'none' && m.accounts.length) {
+      const pw = defaultPayWith(m)
+      if (pw) setDraft((d) => ({ ...d, order: { ...d.order!, pay_with: d.order!.pay_with || pw } }))
+    }
+  }, [kind, draft.money_in, draft.order, m])
 
   function choose(k: CardKind) {
     setKind(k); setDraft(withDefaults(k, e.suggestion, e, m)); setEditing(true); setError('')
@@ -417,6 +425,15 @@ function EditForm({ kind, draft, setDraft, trips, today, m }: {
             onChange={(ev) => { set({ paid_with_afterpay: ev.target.checked }); if (ev.target.checked && !draft.afterpay) setA({ store: o.store, total: o.total, purchased_on: o.ordered_on ?? today }) }} />
           Paid with Afterpay
         </label>
+        {!o.paid_with_afterpay && (
+          <F label="Paid with" wide>
+            <select className={inputCls} value={o.pay_with ?? 'none'} onChange={(ev) => set({ pay_with: ev.target.value })}>
+              {m.accounts.filter((x) => x.kind === 'checking').map((x) => <option key={x.id} value={`a:${x.id}`}>{x.institution ?? x.name}</option>)}
+              {m.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
+              <option value="none">Don't log it (already logged)</option>
+            </select>
+          </F>
+        )}
         {o.paid_with_afterpay && (
           <>
             <F label="Bought on"><input type="date" className={inputCls} value={a.purchased_on ?? o.ordered_on ?? today} onChange={(ev) => setA({ purchased_on: orNull(ev.target.value) })} /></F>

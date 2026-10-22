@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { addDays, money, shortDate } from '../lib/dates'
 import {
-  addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
+  type TripCost, addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
   parseMoney, undoPayment, updateRow, type MoneyData,
 } from '../lib/money'
 import { SWATCHES, type AfterpayOrder, type Bill, type Card, type Subscription } from '../lib/types'
@@ -12,12 +12,13 @@ interface Props {
   loaded: boolean
   reloadMoney: () => Promise<void>
   onOpenDay: (date: string) => void
+  tripCosts?: TripCost[]
 }
 
 const ordinal = (n: number) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th')
 
 /** Bills tab: overview, credit cards, Afterpay, subscriptions, other monthly bills. */
-export default function BillsView({ today, money: m, loaded, reloadMoney, onOpenDay }: Props) {
+export default function BillsView({ today, money: m, loaded, reloadMoney, onOpenDay, tripCosts = [] }: Props) {
   const [error, setError] = useState('')
 
   /** Runs a change, then reloads so every screen shows the new numbers. */
@@ -38,7 +39,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
     return t
   }, 0)
   const subMonthly = m.subs.reduce((t, s) => t + (s.cycle === 'monthly' ? s.amount : s.cycle === 'yearly' ? s.amount / 12 : (s.amount * 52) / 12), 0)
-  const due = dueBeforePayday(m, today)
+  const due = dueBeforePayday(m, today, tripCosts)
   const payFrom = [
     ...m.accounts.filter((a) => a.kind === 'checking').map((a) => ({ value: `a:${a.id}`, label: a.institution ?? a.name })),
     ...m.cards.map((c) => ({ value: `c:${c.id}`, label: c.name })),
@@ -63,7 +64,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         </div>
         {due && (
           <p className="m-0 text-sm text-muted">
-            <b className="text-fg">Before your {shortDate(due.payday)} payday:</b> {money(due.total)} going out ({due.billCount} bill{due.billCount === 1 ? '' : 's'}, {due.subCount} auto-pay)
+            <b className="text-fg">Before your {shortDate(due.payday)} payday:</b> {money(due.total)} going out ({due.billCount} bill{due.billCount === 1 ? '' : 's'}, {due.subCount} auto-pay{due.tripCount ? `, ${money(due.tripTotal)} for your trip: ${due.tripLabels.join(', ')}` : ''})
             {due.missingAmounts ? `, plus ${due.missingAmounts} card${due.missingAmounts === 1 ? '' : 's'} with no minimum entered yet` : ''}.
           </p>
         )}

@@ -11,7 +11,7 @@ import { AnytimeTodos, DayPlans } from './Plans'
 import { EMPTY_PLANS, loadPlans, type Plans } from '../lib/plans'
 import PhoneShell from './PhoneShell'
 import { useIsPhone } from '../lib/useIsPhone'
-import { EMPTY_TRIPS, loadTrips, type TripsData } from '../lib/trips'
+import { EMPTY_TRIPS, loadTrips, tripCostsDue, type TripsData } from '../lib/trips'
 import TripsView, { DayTrips, TravelCard, TripModeCard } from './Trips'
 import type { PhoneTab } from './PhoneShell'
 import { EMPTY_INBOX, arrivingToday, loadInbox, stillReading, waitingCount, type CardKind, type InboxData } from '../lib/inbox'
@@ -148,7 +148,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   }
 
   const np = nextPayday(moneyData, today)
-  const due = dueBeforePayday(moneyData, today)
+  const tripCosts = tripCostsDue(trips)
+  const due = dueBeforePayday(moneyData, today, tripCosts)
   const late = overdue(moneyData, today)
   const waiting = waitingCount(inbox)
   const arriving = arrivingToday(inbox.orders, today)
@@ -253,9 +254,9 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           {due && (
             <span className="inline-flex items-center rounded-full bg-header-2 text-white py-1.5 px-3 font-bold text-sm tnum"
               title={due.missingAmounts ? `${due.missingAmounts} bill(s) have no amount yet. Add minimums on the Bills tab.` : undefined}>
-              {due.billCount + due.subCount === 0
+              {due.billCount + due.subCount + due.tripCount === 0
                 ? 'Nothing due before payday'
-                : `Due before payday · ${money(due.total)}${due.missingAmounts ? '+' : ''} (${due.billCount} bill${due.billCount === 1 ? '' : 's'}, ${due.subCount} auto-pay)`}
+                : `Due before payday · ${money(due.total)}${due.missingAmounts ? '+' : ''} (${due.billCount} bill${due.billCount === 1 ? '' : 's'}, ${due.subCount} auto-pay${due.tripCount ? `, ${due.tripCount} trip` : ''})`}
             </span>
           )}
           <button type="button" onClick={() => openInbox()} aria-label={`Inbox, ${waiting} to review`}
@@ -304,7 +305,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           money={moneyData} moneyLoaded={moneyLoaded} reloadMoney={reloadMoney}
           plans={plans} trips={trips} orders={inbox.orders} dates={dates} dayExtra={dayPlans} anytime={<AnytimeTodos today={today} plans={plans} reload={reloadPlans} />} />
       )}
-      {tab === 'bills' && <BillsView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
+      {tab === 'bills' && <BillsView tripCosts={tripCosts} today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}
       {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} />}
 

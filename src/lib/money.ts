@@ -216,7 +216,10 @@ export function paycheckTotal(d: MoneyData): number {
 }
 
 /** Everything leaving your accounts from today until (not including) the next payday. */
-export function dueBeforePayday(d: MoneyData, today: string) {
+/** A trip cost (hotel, car, tour…) to pay on a set day. */
+export interface TripCost { date: string; amount: number; label: string }
+
+export function dueBeforePayday(d: MoneyData, today: string, tripCosts: TripCost[] = []) {
   const np = nextPayday(d, today)
   if (!np) return null
   const stop = np.days === 0 ? (nextPayday(d, addDays(today, 1))?.date ?? np.date) : np.date
@@ -226,11 +229,16 @@ export function dueBeforePayday(d: MoneyData, today: string) {
   }
   const bills = items.filter((o) => o.kind !== 'sub')
   const subs = items.filter((o) => o.kind === 'sub')
+  const trips = tripCosts.filter((c) => c.date >= today && c.date < stop && c.amount > 0)
+  const tripTotal = trips.reduce((t, c) => t + c.amount, 0)
   return {
     payday: np.date,
-    total: items.reduce((t, o) => t + (o.amount ?? 0), 0),
+    total: round2(items.reduce((t, o) => t + (o.amount ?? 0), 0) + tripTotal),
     billCount: bills.length,
     subCount: subs.length,
+    tripCount: trips.length,
+    tripTotal: round2(tripTotal),
+    tripLabels: trips.map((c) => c.label),
     missingAmounts: bills.filter((o) => o.amount === null).length,
   }
 }

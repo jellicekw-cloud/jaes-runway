@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, dateOf } from '../lib/dates'
 import type { MoneyData } from '../lib/money'
 import type { Plans } from '../lib/plans'
-import type { TripsData } from '../lib/trips'
+import { tripCostsDue, type TripsData } from '../lib/trips'
 import type { Order } from '../lib/inbox'
 import type { SpecialDate } from '../lib/specialDates'
 import PhoneHome from './PhoneHome'
@@ -103,7 +103,7 @@ export default function PhoneShell(p: Props) {
             </div>
             <div className="-mx-4">
               {moneyPart === 'bills'
-                ? <BillsView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={(d) => { setSelected(d); go('calendar') }} />
+                ? <BillsView tripCosts={tripCostsDue(p.trips)} today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={(d) => { setSelected(d); go('calendar') }} />
                 : <MoneyView today={today} money={money} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={onLog} onMoneyIn={p.onMoneyIn} />}
             </div>
           </>

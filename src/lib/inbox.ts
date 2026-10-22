@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { DAYS, addDays, dateOf, daysBetween, shortDate } from './dates'
-import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, type IncomeKind, type MoneyData } from './money'
+import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
 import { timeLabel } from './plans'
 import { createTrip, saveItem, type ItemKind, type PassType } from './trips'
 
@@ -22,6 +22,7 @@ export interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
   status: OrderStatus | null; carrier: string | null; tracking_number: string | null; expected_on: string | null
   delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean
+  pay_with?: string | null   // set when you review it: 'a:<account id>', 'c:<card id>' or 'none' (don't log as spending)
 }
 export interface AfterpayInfo { store: string | null; total: number | null; purchased_on: string | null; first_payment_on: string | null; order_number: string | null }
 export interface AppointmentInfo { title: string | null; date: string | null; start_time: string | null; end_time: string | null; location: string | null; notes: string | null }
@@ -208,6 +209,11 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
     }
     const orderId = (ins.data as { id: string }).id
     let line = `${o.store} added to On the way`
+    const pw = payWithOf(o.pay_with)
+    if (!o.paid_with_afterpay && pw && o.total) {
+      await logPurchase(m, { amount: o.total, description: o.items ? `${o.store!.trim()} · ${o.items}` : o.store!.trim(), category: 'Shopping', date: o.ordered_on ?? today, with: pw })
+      line += ` · ${o.total.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} logged`
+    }
     if (o.paid_with_afterpay) {
       const a = s.afterpay
       const purchased = a?.purchased_on ?? o.ordered_on ?? today
@@ -303,4 +309,25 @@ export function moneyInDefaults(x: MoneyInInfo, m: MoneyData): MoneyInInfo {
   const byHint = hint ? m.accounts.find((a) => a.kind === 'checking' && (a.institution ?? a.name).toLowerCase().split(/\s+/).some((w) => w.length > 2 && hint.includes(w))
     || (hint.includes('navy') && (a.institution ?? '').toLowerCase() === 'nfcu')) : undefined
   return { ...x, income_kind: kind, account_id: x.account_id ?? byHint?.id ?? defaultIncomeAccount(m, kind) }
+}
+
+/** 'a:<id>' / 'c:<id>' → how it was paid; 'none' or empty → don't log it. */
+export function payWithOf(v: string | null | undefined): PayWith | null {
+  if (!v || v === 'none') return null
+  const [k, id] = [v.slice(0, 1), v.slice(2)]
+  return k === 'a' ? { kind: 'account', id } : k === 'c' ? { kind: 'card', id } : null
+}
+
+/** Default for an order card: the same account + Add uses for purchases (NFCU). */
+export const defaultPayWith = (m: MoneyData): string | null => {
+  const id = billsAccountId(m)
+  return id ? `a:${id}` : null
+}
+
+export function payWithLabel(m: MoneyData, v: string | null | undefined): string | null {
+  const pw = payWithOf(v)
+  if (!pw) return null
+  if (pw.kind === 'account') return m.accounts.find((a) => a.id === pw.id)?.institution ?? 'checking'
+  if (pw.kind === 'card') return m.cards.find((c) => c.id === pw.id)?.name ?? 'card'
+  return null
 }

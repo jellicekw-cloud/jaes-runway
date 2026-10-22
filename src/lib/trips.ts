@@ -305,3 +305,10 @@ export function nightsBetween(a: string, b: string): number {
 }
 
 export { addDays }
+
+/** Trip costs with a pay-on day (hotel at check-in/out, car, tours…). Flights are left out: tickets are paid when booked. */
+export function tripCostsDue(d: TripsData): { date: string; amount: number; label: string }[] {
+  return d.trips.filter((t) => t.status !== 'idea').flatMap((t) => t.items
+    .filter((i) => i.kind !== 'flight' && i.cost && i.cost > 0 && i.cost_due_on)
+    .map((i) => ({ date: i.cost_due_on!, amount: i.cost!, label: `${i.title} (${t.name})` })))
+}
