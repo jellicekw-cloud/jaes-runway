@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { DAYS, addDays, dateOf, daysBetween, shortDate } from './dates'
-import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
+import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, installmentAmount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
 import { timeLabel } from './plans'
 import { createTrip, saveItem, type ItemKind, type PassType } from './trips'
 
@@ -15,7 +15,23 @@ export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
 export interface Order {
   id: string; store: string; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
   status: OrderStatus; carrier: string | null; tracking_number: string | null; expected_on: string | null; delayed_from: string | null
-  delivered_on: string | null; delivered_time: string | null; afterpay_order_id: string | null
+  delivered_on: string | null; delivered_time: string | null; afterpay_order_id: string | null; pay_with?: string | null
+}
+
+export type ReturnStage = 'started' | 'dropped_off' | 'refunded'
+export const RETURN_STAGE_LABEL: Record<ReturnStage, string> = { started: 'Return started', dropped_off: 'Dropped off', refunded: 'Refund came' }
+
+/** A return you're tracking (10_returns.sql). */
+export interface ReturnRec {
+  id: string; order_id: string | null; store: string; order_number: string | null; items: string | null; amount: number | null; status: ReturnStage
+  started_on: string; drop_off_by: string | null; dropped_off_on: string | null; refunded_on: string | null; refund_to: string | null
+}
+
+/** What the reader found in a return email (or what you typed). */
+export interface ReturnInfo {
+  stage: ReturnStage | null; store: string | null; order_number: string | null; items: string | null; amount: number | null
+  date: string | null; drop_off_by: string | null; refund_method: string | null
+  return_id?: string | null; order_id?: string | null; refund_to?: string | null
 }
 
 export interface OrderInfo {
@@ -37,11 +53,11 @@ export interface MoneyInInfo {
 }
 export interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 
 export type EmailStatus = 'reading' | 'review' | 'unsure' | 'auto' | 'added' | 'skipped' | 'merged' | 'error'
-export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip' | 'money_in'
+export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip' | 'money_in' | 'return'
 
 export interface InboxEmail {
   id: string; source: 'forward' | 'paste'; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null
@@ -49,27 +65,33 @@ export interface InboxEmail {
   error: string | null; created_at: string; handled_at: string | null
 }
 
-export interface InboxData { emails: InboxEmail[]; orders: Order[] }
-export const EMPTY_INBOX: InboxData = { emails: [], orders: [] }
+export interface InboxData { emails: InboxEmail[]; orders: Order[]; returns: ReturnRec[] }
+export const EMPTY_INBOX: InboxData = { emails: [], orders: [], returns: [] }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 
 export async function loadInbox(today: string): Promise<InboxData> {
-  const [emails, orders] = await Promise.all([
+  const [emails, orders, returns] = await Promise.all([
     supabase.from('inbox_emails')
       .select('id, source, from_name, from_address, subject, sent_at, body, status, kind, summary, suggestion, order_id, error, created_at, handled_at')
       .or(`status.in.(reading,review,unsure,error),handled_at.gte.${addDays(today, -7)}`)
       .order('created_at', { ascending: false }).limit(80),
     supabase.from('orders')
-      .select('id, store, order_number, items, total, ordered_on, status, carrier, tracking_number, expected_on, delayed_from, delivered_on, delivered_time, afterpay_order_id')
+      .select('*')   // includes pay_with once 10_returns.sql is run
       .or(`status.not.in.(delivered,cancelled),delivered_on.gte.${addDays(today, -1)}`)
       .order('expected_on', { ascending: true, nullsFirst: false }),
+    supabase.from('returns')
+      .select('id, order_id, store, order_number, items, amount, status, started_on, drop_off_by, dropped_off_on, refunded_on, refund_to')
+      .or(`status.neq.refunded,refunded_on.gte.${addDays(today, -7)}`)
+      .order('started_on', { ascending: true }),
   ])
   if (emails.error) throw emails.error
   if (orders.error) throw orders.error
   return {
     emails: (emails.data ?? []).map((e) => ({ ...e, suggestion: e.suggestion ?? {} })) as InboxEmail[],
     orders: (orders.data ?? []).map((o) => ({ ...o, total: num(o.total), delivered_time: o.delivered_time ? String(o.delivered_time).slice(0, 5) : null })) as Order[],
+    // Before 10_returns.sql is run the table isn't there: no returns yet
+    returns: returns.error ? [] : (returns.data ?? []).map((x) => ({ ...x, amount: num(x.amount) })) as ReturnRec[],
   }
 }
 
@@ -184,6 +206,14 @@ export function needsFixing(kind: CardKind, s: Suggestion, trips: { id: string }
     if (!s.money_in?.amount || s.money_in.amount <= 0) return 'Add the amount.'
     if (!s.money_in.account_id) return 'Pick which account it went into.'
   }
+  if (kind === 'return') {
+    const x = s.ret
+    if (!x?.store?.trim()) return 'Add the store name.'
+    if (x.stage === 'refunded') {
+      if (!x.amount || x.amount <= 0) return 'Add the refund amount.'
+      if (!x.refund_to) return 'Pick where the refund went.'
+    }
+  }
   if (kind === 'trip') {
     const t = s.trip_item
     if (!t?.title?.trim() || !t.date) return 'Add a name and a date.'
@@ -198,11 +228,17 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
   if (kind === 'order') {
     const o = s.order!
     const status: OrderStatus = o.status ?? 'ordered'
-    const ins = await supabase.from('orders').insert({
+    const row: Record<string, unknown> = {
       store: o.store!.trim(), order_number: o.order_number || null, items: o.items || null, total: o.total, ordered_on: o.ordered_on ?? today,
       status, carrier: o.carrier, tracking_number: o.tracking_number, expected_on: o.expected_on,
       delivered_on: status === 'delivered' ? (o.delivered_on ?? today) : null, delivered_time: status === 'delivered' ? o.delivered_time : null,
-    }).select('id').single()
+      pay_with: !o.paid_with_afterpay && payWithOf(o.pay_with) ? o.pay_with : null,   // so a refund knows where to go
+    }
+    let ins = await supabase.from('orders').insert(row).select('id').single()
+    if (ins.error && /pay_with/.test(ins.error.message)) {   // 10_returns.sql not run yet
+      delete row.pay_with
+      ins = await supabase.from('orders').insert(row).select('id').single()
+    }
     if (ins.error) {
       if (ins.error.code === '23505') throw new Error('That order number is already in Runway. Skip this one.')
       throw ins.error
@@ -251,6 +287,18 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
     if (error) throw error
     await finish(e, s, kind)
     return `${a.title} added to ${shortDate(a.date!)}`
+  }
+
+  if (kind === 'return') {
+    const x = s.ret!
+    if (x.stage === 'refunded') {
+      await applyRefund(m, x, today)
+      await finish(e, s, kind)
+      return `Refund · ${money(x.amount!)} back to ${refundToLabel(m, x.refund_to) ?? 'you'}`
+    }
+    const id = await saveReturn(x, today)
+    await finish(e, { ...s, ret: { ...x, return_id: id } }, kind)
+    return `${x.store!.trim()} return added · tracking the refund`
   }
 
   if (kind === 'money_in') {
@@ -330,4 +378,163 @@ export function payWithLabel(m: MoneyData, v: string | null | undefined): string
   if (pw.kind === 'account') return m.accounts.find((a) => a.id === pw.id)?.institution ?? 'checking'
   if (pw.kind === 'card') return m.cards.find((c) => c.id === pw.id)?.name ?? 'card'
   return null
+}
+
+// ---------------------------------------------------------------------------
+// Returns and refunds
+// ---------------------------------------------------------------------------
+
+const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+const r2 = (n: number) => Math.round(n * 100) / 100
+
+/** Open returns first (oldest first), then refunds from the last week. */
+export const openReturns = (d: InboxData) => d.returns.filter((x) => x.status !== 'refunded')
+export const recentRefunds = (d: InboxData) => d.returns.filter((x) => x.status === 'refunded')
+
+/** Days you've been waiting on the refund (from drop-off, or from the start if never marked dropped off). */
+export const waitingDays = (x: ReturnRec, today: string) => daysBetween(x.dropped_off_on ?? x.started_on, today)
+export const REFUND_LATE_DAYS = 14
+
+export type ReturnTone = 'done' | 'late' | 'soon' | 'go'
+export function returnTone(x: ReturnRec, today: string): ReturnTone {
+  if (x.status === 'refunded') return 'done'
+  if (x.status === 'dropped_off' && waitingDays(x, today) >= REFUND_LATE_DAYS) return 'late'
+  if (x.status === 'started' && x.drop_off_by && daysBetween(today, x.drop_off_by) <= 2) return 'soon'
+  return 'go'
+}
+
+export function returnLine(x: ReturnRec, today: string, label?: string | null): string {
+  const amt = x.amount ? money(x.amount) : 'refund'
+  if (x.status === 'refunded') return `Refunded ${x.amount ? money(x.amount) : ''}${label ? ` to ${label}` : ''}${x.refunded_on ? ` · ${shortDate(x.refunded_on)}` : ''}`.replace('  ', ' ')
+  if (x.status === 'dropped_off') {
+    const n = waitingDays(x, today)
+    return n >= REFUND_LATE_DAYS ? `${n} days and no ${amt} yet. Contact ${x.store}?` : `Dropped off${x.dropped_off_on ? ` ${when(x.dropped_off_on, today)}` : ''} · waiting on ${amt}`
+  }
+  if (x.drop_off_by) {
+    const n = daysBetween(today, x.drop_off_by)
+    if (n < 0) return `Drop-off deadline was ${shortDate(x.drop_off_by)}`
+    return `Drop off by ${when(x.drop_off_by, today)} · ${amt} back`
+  }
+  return `Return started · ${amt} back`
+}
+
+/** Choices for "Refund went back to". */
+export function refundOptions(m: MoneyData): { value: string; label: string }[] {
+  return [
+    ...m.cards.map((c) => ({ value: `c:${c.id}`, label: c.name })),
+    ...m.accounts.filter((a) => a.kind === 'checking').map((a) => ({ value: `a:${a.id}`, label: a.institution ?? a.name })),
+    ...m.orders.map((o) => ({ value: `p:${o.id}`, label: `Afterpay · ${o.name}` })),
+    { value: 'none', label: 'Gift card / store credit (don\'t count)' },
+  ]
+}
+
+export function refundToLabel(m: MoneyData, v: string | null | undefined): string | null {
+  if (!v) return null
+  if (v === 'none') return 'gift card / store credit'
+  const id = v.slice(2)
+  if (v.startsWith('c:')) return m.cards.find((c) => c.id === id)?.name ?? 'card'
+  if (v.startsWith('a:')) { const a = m.accounts.find((x) => x.id === id); return a?.institution ?? a?.name ?? 'account' }
+  if (v.startsWith('p:')) return `Afterpay · ${m.orders.find((o) => o.id === id)?.name ?? 'plan'}`
+  return null
+}
+
+/** The order's payment, if Runway knows it. */
+export function refundToFromOrder(o: Order | undefined): string | null {
+  if (!o) return null
+  if (o.afterpay_order_id) return `p:${o.afterpay_order_id}`
+  return payWithOf(o.pay_with) ? o.pay_with! : null
+}
+
+/** Start tracking a return (or move one along). Returns its id. */
+export async function saveReturn(x: ReturnInfo, today: string): Promise<string> {
+  const stage: ReturnStage = x.stage === 'dropped_off' ? 'dropped_off' : 'started'
+  if (x.return_id) {
+    const patch: Record<string, unknown> = { store: x.store!.trim(), items: x.items || null, amount: x.amount, drop_off_by: x.drop_off_by || null, order_number: x.order_number || null }
+    if (stage === 'dropped_off') { patch.status = 'dropped_off'; patch.dropped_off_on = x.date ?? today }
+    if (x.refund_to !== undefined) patch.refund_to = x.refund_to
+    const { error } = await supabase.from('returns').update(patch).eq('id', x.return_id)
+    if (error) throw error
+    return x.return_id
+  }
+  const { data, error } = await supabase.from('returns').insert({
+    order_id: x.order_id ?? null, store: x.store!.trim(), order_number: x.order_number || null, items: x.items || null, amount: x.amount,
+    status: stage, started_on: stage === 'started' ? (x.date ?? today) : today, drop_off_by: x.drop_off_by || null,
+    dropped_off_on: stage === 'dropped_off' ? (x.date ?? today) : null, refund_to: x.refund_to ?? null,
+  }).select('id').single()
+  if (error) {
+    if (/returns/.test(error.message)) throw new Error('Returns aren\'t set up yet. Run 10_returns.sql in Supabase first.')
+    throw error
+  }
+  return (data as { id: string }).id
+}
+
+export async function markDroppedOff(x: ReturnRec, today: string): Promise<void> {
+  const { error } = await supabase.from('returns').update({ status: 'dropped_off', dropped_off_on: today }).eq('id', x.id)
+  if (error) throw error
+}
+
+export async function removeReturn(id: string): Promise<void> {
+  const { error } = await supabase.from('returns').delete().eq('id', id)
+  if (error) throw error
+}
+
+async function refundTxn(f: { amount: number; description: string; date: string; account_id?: string | null; card_id?: string | null }) {
+  const { error } = await supabase.from('transactions').insert({
+    occurred_on: f.date, amount: -r2(f.amount), description: f.description, category: 'Shopping', source: 'manual',
+    account_id: f.account_id ?? null, card_id: f.card_id ?? null,
+  })
+  if (error) throw error
+}
+
+async function refundToCard(m: MoneyData, cardId: string, amount: number, description: string, date: string) {
+  await refundTxn({ amount, description, date, card_id: cardId })
+  const card = m.cards.find((c) => c.id === cardId)
+  if (card && card.balance !== null) {
+    const { error } = await supabase.from('cards').update({ balance: Math.max(0, r2(card.balance - amount)) }).eq('id', cardId)
+    if (error) throw error
+  }
+}
+
+/**
+ * The refund landed. It goes back where you paid:
+ *  - a card: the card balance goes down (and spending goes down)
+ *  - SoFi / NFCU: the account goes up (and spending goes down)
+ *  - Afterpay: comes off the last unpaid payments first; anything beyond that goes back to the plan's card or account
+ *  - gift card / store credit: just marked done
+ */
+export async function applyRefund(m: MoneyData, x: ReturnInfo, today: string): Promise<void> {
+  const amount = r2(x.amount!)
+  const date = x.date ?? today
+  const description = `Refund · ${x.store!.trim()}${x.items ? ` · ${x.items}` : ''}`
+  const to = x.refund_to ?? 'none'
+  const id = to.slice(2)
+  if (to.startsWith('c:')) await refundToCard(m, id, amount, description, date)
+  else if (to.startsWith('a:')) await refundTxn({ amount, description, date, account_id: id })
+  else if (to.startsWith('p:')) {
+    const plan = m.orders.find((o) => o.id === id)
+    if (!plan) throw new Error('That Afterpay plan isn\'t in Bills anymore. Pick where the refund went.')
+    let unpaid = 0
+    for (let n = 1; n <= plan.installments; n++) if (!m.payments.some((p) => p.afterpay_order_id === plan.id && p.installment_no === n)) unpaid += installmentAmount(plan, n)
+    const offPlan = Math.min(amount, r2(unpaid))
+    const back = r2(amount - offPlan)
+    if (offPlan > 0) {
+      const { error } = await supabase.from('afterpay_orders').update({ refunded: r2((plan.refunded ?? 0) + offPlan) }).eq('id', plan.id)
+      if (error) throw error
+      await refundTxn({ amount: offPlan, description, date })
+    }
+    if (back > 0) {
+      if (plan.card_id) await refundToCard(m, plan.card_id, back, description, date)
+      else await refundTxn({ amount: back, description, date, account_id: plan.account_id })
+    }
+  }
+  const row = { status: 'refunded', refunded_on: date, amount, refund_to: to, items: x.items || null }
+  if (x.return_id) {
+    const { error } = await supabase.from('returns').update(row).eq('id', x.return_id)
+    if (error) throw error
+  } else {
+    const { error } = await supabase.from('returns').insert({
+      ...row, order_id: x.order_id ?? null, store: x.store!.trim(), order_number: x.order_number || null, started_on: date,
+    })
+    if (error) throw error
+  }
 }

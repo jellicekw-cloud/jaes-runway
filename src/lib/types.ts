@@ -118,6 +118,7 @@ export interface AfterpayOrder {
   interval_days: number
   account_id: string | null
   card_id: string | null
+  refunded?: number            // refund taken off the last payments (10_returns.sql)
 }
 
 export interface Payment {

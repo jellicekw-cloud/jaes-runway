@@ -4,10 +4,11 @@ import { INCOME_KIND_LABEL, installmentAmount, type IncomeKind, type MoneyData }
 import { timeLabel } from '../lib/plans'
 import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
 import {
-  ORDER_STATUS_LABEL, addFromEmail, defaultPayWith, moneyInDefaults, payWithLabel, handled, markDelivered, needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, removeOrder,
-  rereadEmail, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
+  ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, addFromEmail, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
+  needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, recentRefunds, refundOptions, refundToFromOrder, refundToLabel, removeOrder, removeReturn,
+  rereadEmail, returnLine, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
   type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
-  type Suggestion, type TripItemInfo,
+  type ReturnInfo, type ReturnRec, type ReturnStage, type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
 
 type Reload = () => Promise<void>
@@ -31,8 +32,8 @@ function F({ label, wide, children }: { label: string; wide?: boolean; children:
   )
 }
 
-const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', gmail_confirm: '✉', other: '✉' }
-const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in' }
+const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', return: '↩️', gmail_confirm: '✉', other: '✉' }
+const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', return: 'Return' }
 
 const blankOrder = (store: string | null = null): OrderInfo => ({
   store, order_number: null, items: null, total: null, ordered_on: null, status: 'ordered', carrier: null, tracking_number: null,
@@ -43,6 +44,10 @@ const blankAppt = (title: string | null = null): AppointmentInfo => ({ title, da
 const blankTrip = (title: string | null = null): TripItemInfo => ({
   trip_id: null, kind: null, title, date: null, time: null, end_date: null, end_time: null, confirmation: null, airline: null,
   flight_number: null, origin: null, destination: null, details: null, cost: null,
+})
+
+const blankReturn = (store: string | null = null): ReturnInfo => ({
+  stage: 'started', store, order_number: null, items: null, amount: null, date: null, drop_off_by: null, refund_method: null,
 })
 
 const toNum = (v: string) => {
@@ -68,7 +73,7 @@ function sender(e: InboxEmail) {
 
 const TONE_TEXT = { done: 'text-pay-ink', late: 'text-bad', delayed: 'text-warn', go: 'text-pkg-ink' } as const
 
-export function OrderRow({ o, today, reload, compact }: { o: Order; today: string; reload: Reload; compact?: boolean }) {
+export function OrderRow({ o, today, reload, compact, onReturn }: { o: Order; today: string; reload: Reload; compact?: boolean; onReturn?: (o: Order) => void }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const tone = packageTone(o, today)
@@ -88,6 +93,10 @@ export function OrderRow({ o, today, reload, compact }: { o: Order; today: strin
       {o.status !== 'delivered' && (
         <button type="button" disabled={busy} onClick={() => void run(() => markDelivered(o, today))}
           className="h-9 px-3 rounded-lg border border-pkg bg-surface text-pkg-ink text-sm font-bold cursor-pointer shrink-0">Got it</button>
+      )}
+      {!compact && onReturn && o.status === 'delivered' && (
+        <button type="button" onClick={() => onReturn(o)}
+          className="h-9 px-3 rounded-lg border border-line bg-surface text-fg text-sm font-bold cursor-pointer shrink-0">Return</button>
       )}
       {!compact && (
         confirm
@@ -168,6 +177,7 @@ function initialKind(e: InboxEmail): CardKind | null {
   if (e.kind === 'appointment') return e.suggestion.appointment ? 'appointment' : null
   if (e.kind === 'trip') return e.suggestion.trip_item ? 'trip' : null
   if (e.kind === 'money_in') return e.suggestion.money_in ? 'money_in' : null
+  if (e.kind === 'return') return e.suggestion.ret ? 'return' : null
   return null
 }
 
@@ -185,11 +195,25 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
     return { ...s, order, afterpay }
   }
   if (kind === 'afterpay') return { ...s, afterpay: { ...blankAfterpay(s.order?.store ?? who), total: s.order?.total ?? null, ...(s.afterpay ?? {}) } }
+  if (kind === 'return') {
+    const base = { ...blankReturn(s.order?.store ?? who), items: s.order?.items ?? null, order_number: s.order?.order_number ?? null }
+    return { ...s, ret: { ...base, ...(s.ret ?? {}), stage: s.ret?.stage ?? 'started' } }
+  }
   if (kind === 'appointment') return { ...s, appointment: { ...blankAppt(who), ...(s.appointment ?? {}) } }
   return { ...s, trip_item: { ...blankTrip(e.subject), ...(s.trip_item ?? {}) } }
 }
 
 function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData, m: MoneyData): string[] {
+  if (kind === 'return' && s.ret) {
+    const x = s.ret
+    const first = [x.items, x.amount ? `${money(x.amount)} refund` : null].filter(Boolean).join(' · ') || 'Return'
+    if (x.stage === 'refunded') {
+      const to = refundToLabel(m, x.refund_to)
+      return [first, to ? `Goes back to ${to}` : 'Where did it go? Tap Edit to pick', x.return_id ? 'Closes out the return you started' : '']
+        .filter(Boolean)
+    }
+    return [first, x.stage === 'dropped_off' ? 'Dropped off · Runway watches for the refund' : `Return started${x.drop_off_by ? ` · drop off by ${shortDate(x.drop_off_by)}` : ''}`]
+  }
   if (kind === 'money_in' && s.money_in) {
     const x = s.money_in
     const acct = m.accounts.find((a) => a.id === x.account_id)
@@ -289,6 +313,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
         : kind === 'appointment' ? `Appointment · ${draft.appointment?.title ?? sender(e)}`
           : kind === 'trip' ? `Trip · ${draft.trip_item?.title ?? sender(e)}`
           : kind === 'money_in' ? `Money in · ${draft.money_in?.amount ? money(draft.money_in.amount) : sender(e)}`
+          : kind === 'return' ? `${draft.ret?.stage === 'refunded' ? 'Refund' : 'Return'} · ${draft.ret?.store ?? sender(e)}`
             : e.subject || sender(e)
   const icon = KIND_ICON[e.kind === 'gmail_confirm' ? 'gmail_confirm' : kind ?? e.kind ?? 'other'] ?? '✉'
 
@@ -345,7 +370,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-bold tracking-wider uppercase text-muted">{kind ? 'Adding it as' : 'What is it?'}</span>
               <div className="flex flex-wrap gap-1.5">
-                {(['order', 'afterpay', 'appointment', 'trip', 'money_in'] as CardKind[]).map((k) => (
+                {(['order', 'afterpay', 'appointment', 'trip', 'money_in', 'return'] as CardKind[]).map((k) => (
                   <button key={k} type="button" aria-pressed={kind === k} onClick={() => choose(k)}
                     className={`h-9 px-3 rounded-full text-sm font-bold cursor-pointer border ${kind === k ? 'bg-accent text-accent-ink border-accent' : 'bg-surface-2 text-fg border-line'}`}>
                     {KIND_NAME[k]}
@@ -380,6 +405,11 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
 function EditForm({ kind, draft, setDraft, trips, today, m }: {
   kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string; m: MoneyData
 }) {
+  if (kind === 'return') {
+    const x = draft.ret ?? blankReturn()
+    const set = (p: Partial<ReturnInfo>) => setDraft((d) => ({ ...d, ret: { ...(d.ret ?? blankReturn()), ...p } }))
+    return <ReturnFields x={x} set={set} m={m} today={today} />
+  }
   if (kind === 'money_in') {
     const x = draft.money_in!
     const set = (p: Partial<MoneyInInfo>) => setDraft((d) => ({ ...d, money_in: { ...d.money_in!, ...p } }))
@@ -511,6 +541,171 @@ function EditForm({ kind, draft, setDraft, trips, today, m }: {
 }
 
 // ---------------------------------------------------------------------------
+// Returns
+// ---------------------------------------------------------------------------
+
+function RefundToSelect({ value, onChange, m, id }: { value: string | null | undefined; onChange: (v: string | null) => void; m: MoneyData; id?: string }) {
+  return (
+    <select id={id} className={inputCls} value={value ?? ''} onChange={(ev) => onChange(ev.target.value || null)}>
+      <option value="">Pick where it went…</option>
+      {refundOptions(m).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  )
+}
+
+function ReturnFields({ x, set, m, today }: { x: ReturnInfo; set: (p: Partial<ReturnInfo>) => void; m: MoneyData; today: string }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <F label="Step">
+        <select className={inputCls} value={x.stage ?? 'started'} onChange={(ev) => set({ stage: ev.target.value as ReturnStage })}>
+          {(Object.keys(RETURN_STAGE_LABEL) as ReturnStage[]).map((k) => <option key={k} value={k}>{RETURN_STAGE_LABEL[k]}</option>)}
+        </select>
+      </F>
+      <F label="Store"><input className={inputCls} value={x.store ?? ''} onChange={(ev) => set({ store: orNull(ev.target.value) })} /></F>
+      <F label="What you sent back" wide><input className={inputCls} value={x.items ?? ''} onChange={(ev) => set({ items: orNull(ev.target.value) })} /></F>
+      <F label="Refund amount"><input className={inputCls} inputMode="decimal" defaultValue={x.amount ?? ''} onChange={(ev) => set({ amount: toNum(ev.target.value) })} /></F>
+      {x.stage === 'refunded'
+        ? <F label="Refund date"><input type="date" className={inputCls} value={x.date ?? today} onChange={(ev) => set({ date: orNull(ev.target.value) })} /></F>
+        : x.stage === 'started'
+          ? <F label="Drop off by"><input type="date" className={inputCls} value={x.drop_off_by ?? ''} onChange={(ev) => set({ drop_off_by: orNull(ev.target.value) })} /></F>
+          : <F label="Order #"><input className={inputCls} value={x.order_number ?? ''} onChange={(ev) => set({ order_number: orNull(ev.target.value) })} /></F>}
+      <F label={x.stage === 'refunded' ? 'Went back to' : 'Refund goes back to'} wide>
+        <RefundToSelect value={x.refund_to} onChange={(v) => set({ refund_to: v })} m={m} />
+      </F>
+      {x.stage !== 'refunded' && <p className="col-span-2 m-0 text-xs text-muted">Nothing changes in your money until the refund comes. Then it goes back to this card or account.</p>}
+    </div>
+  )
+}
+
+function ReturnItem({ x, today, reload, m, onRefund }: { x: ReturnRec; today: string; reload: Reload; m: MoneyData; onRefund: (line: string) => Promise<void> }) {
+  const [refunding, setRefunding] = useState(false)
+  const [amount, setAmount] = useState(x.amount ? String(x.amount) : '')
+  const [to, setTo] = useState<string | null>(x.refund_to)
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const tone = returnTone(x, today)
+  const color = tone === 'done' ? 'text-pay-ink' : tone === 'late' ? 'text-bad' : tone === 'soon' ? 'text-warn' : 'text-muted'
+  async function run(f: () => Promise<void>) {
+    setBusy(true); setErr('')
+    try { await f(); await reload() } catch (e) { setErr(e instanceof Error ? e.message : 'Something went wrong') }
+    setBusy(false)
+  }
+  function refund() {
+    const amt = toNum(amount)
+    if (!amt || amt <= 0) { setErr('Add the refund amount.'); return }
+    if (!to) { setErr('Pick where the refund went.'); return }
+    void run(async () => {
+      await applyRefund(m, { stage: 'refunded', store: x.store, order_number: x.order_number, items: x.items, amount: amt, date: today, drop_off_by: null, refund_method: null, return_id: x.id, order_id: x.order_id, refund_to: to }, today)
+      await onRefund(`Refund · ${money(amt)} back to ${refundToLabel(m, to)}`)
+    })
+  }
+  return (
+    <div className="py-2.5 border-t border-line first:border-t-0 flex flex-col gap-2 min-w-0" data-testid="return-row">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span aria-hidden="true" className="text-lg shrink-0">{tone === 'done' ? '✅' : '↩️'}</span>
+        <span className="flex-1 min-w-0">
+          <b className="block truncate">{x.store}{x.items ? <span className="font-normal text-muted"> · {x.items}</span> : null}</b>
+          <span className={`block text-sm font-bold ${color}`}>{returnLine(x, today, refundToLabel(m, x.refund_to))}</span>
+        </span>
+        {x.status !== 'refunded' && (confirm
+          ? <button type="button" disabled={busy} onClick={() => void run(() => removeReturn(x.id))}
+              className="h-9 px-3 rounded-lg border-0 bg-bad text-white text-sm font-bold cursor-pointer shrink-0">Remove?</button>
+          : <button type="button" aria-label={`Remove ${x.store} return`} onClick={() => setConfirm(true)}
+              className="size-9 rounded-lg border border-line bg-transparent text-muted cursor-pointer shrink-0">×</button>)}
+      </div>
+      {x.status !== 'refunded' && !refunding && (
+        <div className="flex flex-wrap gap-2 pl-8">
+          {x.status === 'started' && (
+            <button type="button" disabled={busy} onClick={() => void run(() => markDroppedOff(x, today))}
+              className="h-9 px-3 rounded-lg border border-line bg-surface text-fg text-sm font-bold cursor-pointer">Dropped off</button>
+          )}
+          <button type="button" onClick={() => setRefunding(true)}
+            className="h-9 px-3 rounded-lg border border-pay bg-surface text-pay-ink text-sm font-bold cursor-pointer">Refund came</button>
+        </div>
+      )}
+      {refunding && (
+        <div className="grid grid-cols-2 gap-2 rounded-xl bg-surface-2 p-2.5">
+          <F label="Amount"><input className={inputCls} inputMode="decimal" value={amount} onChange={(ev) => setAmount(ev.target.value)} aria-label="Refund amount" /></F>
+          <F label="Went back to"><RefundToSelect value={to} onChange={setTo} m={m} /></F>
+          <div className="col-span-2 flex gap-2">
+            <button type="button" disabled={busy} className={btnMain} onClick={refund}>{busy ? 'Saving…' : 'Save refund'}</button>
+            <button type="button" className={btnPlain} onClick={() => { setRefunding(false); setErr('') }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {err && <p role="alert" className="m-0 text-sm font-bold text-bad">{err}</p>}
+    </div>
+  )
+}
+
+function StartReturn({ start, onDone, today, m, reload, onRefund }: { start: ReturnInfo; onDone: () => void; today: string; m: MoneyData; reload: Reload; onRefund: (line: string) => Promise<void> }) {
+  const [x, setX] = useState<ReturnInfo>(start)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  async function save() {
+    if (!x.store?.trim()) { setErr('Add the store name.'); return }
+    if (x.stage === 'refunded' && (!x.amount || !x.refund_to)) { setErr('Add the refund amount and where it went.'); return }
+    setBusy(true); setErr('')
+    try {
+      if (x.stage === 'refunded') {
+        await applyRefund(m, x, today)
+        await onRefund(`Refund · ${money(x.amount!)} back to ${refundToLabel(m, x.refund_to)}`)
+      } else {
+        await saveReturn(x, today)
+        await reload()
+      }
+      onDone()
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Couldn\'t save it'); setBusy(false) }
+  }
+  return (
+    <div className="rounded-2xl border border-accent-hi bg-surface p-3.5 flex flex-col gap-2.5" aria-label="New return" role="group">
+      <b>↩️ New return</b>
+      <ReturnFields x={x} set={(p) => setX((c) => ({ ...c, ...p }))} m={m} today={today} />
+      {err && <p role="alert" className="m-0 text-sm font-bold text-bad">{err}</p>}
+      <div className="flex gap-2">
+        <button type="button" disabled={busy} className={btnMain} onClick={() => void save()}>{busy ? 'Saving…' : 'Save return'}</button>
+        <button type="button" className={btnPlain} onClick={onDone}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+export function returnFromOrder(o: Order): ReturnInfo {
+  return { ...blankReturn(o.store), items: o.items, amount: o.total, order_number: o.order_number, order_id: o.id, refund_to: refundToFromOrder(o) }
+}
+
+function ReturnsSection({ data, today, reload, m, starting, setStarting, onAdded }: {
+  data: InboxData; today: string; reload: Reload; m: MoneyData; starting: ReturnInfo | null; setStarting: (x: ReturnInfo | null) => void
+  onAdded: (line: string, kind: CardKind) => Promise<void>
+}) {
+  const onRefund = (line: string) => onAdded(line, 'return')   // shows the toast and reloads your money too
+  const open = openReturns(data), done = recentRefunds(data)
+  return (
+    <section aria-label="Returns" className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <h3 className={heading}>Returns · {open.length}</h3>
+        {!starting && <button type="button" onClick={() => setStarting(blankReturn())} className="bg-transparent border-0 text-accent text-sm font-bold cursor-pointer">+ Start a return</button>}
+      </div>
+      {starting && <StartReturn key={starting.order_id ?? 'new'} start={starting} onDone={() => setStarting(null)} today={today} m={m} reload={reload} onRefund={onRefund} />}
+      {open.length + done.length === 0
+        ? !starting && <p className="m-0 text-sm text-muted">No returns. Return emails from stores show up here, and Runway watches for the refund.</p>
+        : <div className="rounded-2xl border border-line bg-surface px-3">{[...open, ...done].map((x) => <ReturnItem key={x.id} x={x} today={today} reload={reload} m={m} onRefund={onRefund} />)}</div>}
+    </section>
+  )
+}
+
+function ReadAgain({ id, reload }: { id: string; reload: Reload }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <button type="button" disabled={busy} className="bg-transparent border-0 text-accent font-bold cursor-pointer text-sm shrink-0"
+      onClick={() => { setBusy(true); void rereadEmail(id).catch(() => null).then(reload).finally(() => setBusy(false)) }}>
+      {busy ? 'Reading…' : 'Read again'}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // The Inbox panel (side panel on desktop, full screen on phone)
 // ---------------------------------------------------------------------------
 
@@ -533,6 +728,7 @@ export function InboxPanel({ open, onClose, isPhone, focusPaste, today, data, re
   const [paste, setPaste] = useState('')
   const [pasteBusy, setPasteBusy] = useState(false)
   const [pasteMsg, setPasteMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [starting, setStarting] = useState<ReturnInfo | null>(null)
 
   useEffect(() => {
     const el = dialog.current
@@ -603,8 +799,10 @@ export function InboxPanel({ open, onClose, isPhone, focusPaste, today, data, re
           <h3 className={heading}>On the way · {coming.filter((o) => o.status !== 'delivered').length}</h3>
           {coming.length === 0
             ? <p className="m-0 text-sm text-muted">No packages right now.</p>
-            : <div className="rounded-2xl border border-line bg-surface px-3">{coming.map((o) => <OrderRow key={o.id} o={o} today={today} reload={reload} />)}</div>}
+            : <div className="rounded-2xl border border-line bg-surface px-3">{coming.map((o) => <OrderRow key={o.id} o={o} today={today} reload={reload} onReturn={(x) => setStarting(returnFromOrder(x))} />)}</div>}
         </section>
+
+        <ReturnsSection data={data} today={today} reload={reload} m={m} starting={starting} setStarting={setStarting} onAdded={onAdded} />
 
         <section aria-label="Paste an email" className="flex flex-col gap-2">
           <h3 className={heading}>Paste an email</h3>
@@ -632,6 +830,7 @@ export function InboxPanel({ open, onClose, isPhone, focusPaste, today, data, re
                     <button type="button" className="bg-transparent border-0 text-accent font-bold cursor-pointer text-sm shrink-0"
                       onClick={() => void setEmailStatus(e.id, 'unsure').then(reload)}>Bring back</button>
                   )}
+                  {(e.status === 'auto' || e.status === 'merged' || e.status === 'skipped') && <ReadAgain id={e.id} reload={reload} />}
                 </li>
               ))}
             </ul>

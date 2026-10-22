@@ -6,8 +6,9 @@
 //   2. The Runway app posts a pasted email, asks to read one again, asks for gift ideas, or looks up trip cover photos, signed in as Jae.
 //
 // Each email is saved, then Claude reads it and says what it is. Shipping, delay and delivery
-// updates for an order already in Runway are applied right away. Anything new (an order,
-// an Afterpay plan, an appointment, a trip item) waits in the Inbox for Jae to add.
+// updates for an order already in Runway are applied right away, and so are return steps
+// (started, dropped off). Anything new (an order, an Afterpay plan, an appointment, a trip
+// item, a refund) waits in the Inbox for Jae to add.
 //
 // Secrets (Supabase → Edge Functions → Secrets):
 //   ANTHROPIC_API_KEY   your Claude API key
@@ -41,7 +42,8 @@ const reply = (body: unknown, status = 200) =>
 // ---------------------------------------------------------------------------
 
 type OrderStatus = 'ordered' | 'shipped' | 'out_for_delivery' | 'delivered' | 'delayed' | 'cancelled'
-type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'other'
+type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'return' | 'other'
+type ReturnStage = 'started' | 'dropped_off' | 'refunded'
 
 interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
@@ -55,13 +57,19 @@ interface TripItemInfo {
   confirmation: string | null; airline: string | null; flight_number: string | null; origin: string | null; destination: string | null; details: string | null; cost: number | null
 }
 interface MoneyInInfo { amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null }
+interface ReturnInfo {
+  stage: ReturnStage | null; store: string | null; order_number: string | null; items: string | null; amount: number | null
+  date: string | null; drop_off_by: string | null; refund_method: string | null
+  return_id?: string | null; order_id?: string | null; refund_to?: string | null   // filled in by Runway
+}
 interface Reading {
-  kind: Kind; confident: boolean; summary: string; existing_order_id: string | null
+  kind: Kind; confident: boolean; summary: string; existing_order_id: string | null; existing_return_id: string | null
   order: OrderInfo | null; afterpay: AfterpayInfo | null; appointment: AppointmentInfo | null; trip_item: TripItemInfo | null; money_in: MoneyInInfo | null
+  ret: ReturnInfo | null
 }
 interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 interface EmailRow {
   id: string; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null; body: string
@@ -73,6 +81,11 @@ interface OrderRow {
 interface CardRow { id: string; kind: string | null; suggestion: Suggestion; created_at: string }
 interface TripRow { id: string; name: string; destination: string | null; start_date: string | null; end_date: string | null }
 interface AfterpayRow { id: string; name: string; total: number; created_at: string }
+interface ReturnRow {
+  id: string; order_id: string | null; store: string; order_number: string | null; items: string | null; amount: number | null; status: ReturnStage
+  started_on: string; drop_off_by: string | null; dropped_off_on: string | null; refunded_on: string | null; refund_to: string | null
+}
+interface PastOrder { id: string; store: string; order_number: string | null; items: string | null; total: number | null; pay_with: string | null; afterpay_order_id: string | null }
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -436,12 +449,25 @@ const TOOL = {
     required: ['kind', 'confident', 'summary'],
     properties: {
       kind: {
-        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'other'],
-        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for an installment of an existing Afterpay plan, refunds, or account notices. appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert, a refund to her account. other = anything else (marketing, newsletters, receipts with nothing to track).',
+        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'return', 'other'],
+        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for an installment of an existing Afterpay plan, or an Afterpay account notice. appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
       },
       confident: { type: 'boolean', description: 'false if you are guessing about what kind it is or about the key dates' },
       summary: { type: 'string', description: 'One short line for Jae, e.g. "Amazon order: Echo Dot, arriving Thu Oct 23"' },
       existing_order_id: { ...nul('string'), description: 'id from "Orders already in Runway" when this email is about one of them' },
+      existing_return_id: { ...nul('string'), description: 'id from "Returns in Runway" when this email is about one of them (same store and items)' },
+      return: {
+        ...nul('object'),
+        properties: {
+          stage: { type: ['string', 'null'], enum: ['started', 'dropped_off', 'refunded', null], description: 'started = return requested / label created. dropped_off = dropped off, shipped back, or received by the store. refunded = refund issued or processed (including "advance refund").' },
+          store: nul('string'), order_number: nul('string'),
+          items: { ...nul('string'), description: 'what is being returned (only the returned items, not the whole order)' },
+          amount: { ...nul('number'), description: 'the refund amount for this return' },
+          date: { ...nul('string'), description: 'day this step happened (YYYY-MM-DD)' },
+          drop_off_by: { ...nul('string'), description: 'deadline to drop off / ship the return, if given' },
+          refund_method: { ...nul('string'), description: 'where the refund goes, as the email says it, e.g. "Visa ending in 1234", "Amazon gift card balance", "original payment method", "Afterpay"' },
+        },
+      },
       order: {
         ...nul('object'),
         properties: {
@@ -501,19 +527,22 @@ Rules:
 - Afterpay normally splits a purchase into 4 payments every 2 weeks. A brand-new Afterpay purchase is kind "afterpay". If the email says the first payment is due later (not taken today), first_payment_on is that later date.
 - Jae works for Delta and often flies non-rev standby or on award certificates; standby listings and itineraries are kind "trip".
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
-- Money Jae received (Zelle from Navy Federal, side-work deposits into SoFi, Cash App, refunds) is kind "money_in". Her regular Delta payroll deposit is money_in with is_paycheck true.
+- Money Jae received (Zelle from Navy Federal, side-work deposits into SoFi, Cash App) is kind "money_in". Her regular Delta payroll deposit is money_in with is_paycheck true.
+- Returns and refunds for a purchase (e.g. Amazon "Return request confirmed", "Dropoff confirmed", "Advance refund issued", "Refund processed") are kind "return", never "shipping" or "money_in". Fill the return object. If it matches one of "Returns in Runway", set existing_return_id.
 - If it's a forwarded email, read the original message inside.`
 
-async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips: TripRow[]): Promise<Reading> {
+async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips: TripRow[], returns: ReturnRow[] = []): Promise<Reading> {
   const key = env('ANTHROPIC_API_KEY')
   if (!key) throw new Error('ANTHROPIC_API_KEY is not set in Supabase secrets')
   const orderLines = orders.map((o) =>
     `- id ${o.id}: ${o.store}${o.order_number ? ` #${o.order_number}` : ''}${o.items ? `, ${o.items}` : ''}${o.total !== null ? `, $${o.total}` : ''}, ${o.status}${o.expected_on ? `, expected ${o.expected_on}` : ''}${o.tracking_number ? `, tracking ${o.tracking_number}` : ''}`)
   const tripLines = trips.map((t) => `- id ${t.id}: ${t.name}${t.destination ? ` (${t.destination})` : ''} ${t.start_date ?? '?'} to ${t.end_date ?? '?'}`)
+  const returnLines = returns.map((x) => `- id ${x.id}: ${x.store}${x.order_number ? ` #${x.order_number}` : ''}${x.items ? `, ${x.items}` : ''}${x.amount !== null ? `, $${x.amount}` : ''}, ${x.status}`)
   const text = [
     `Today is ${today}.`,
     `Orders already in Runway:\n${orderLines.join('\n') || '(none)'}`,
     `Trips in Runway:\n${tripLines.join('\n') || '(none)'}`,
+    `Returns in Runway:\n${returnLines.join('\n') || '(none)'}`,
     '--- EMAIL ---',
     `From: ${row.from_name ?? ''} <${row.from_address ?? ''}>`,
     `Subject: ${row.subject ?? ''}`,
@@ -543,16 +572,18 @@ async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips
 
 /** Keeps only well-formed values from the AI's answer. */
 function clean(r: Record<string, unknown>): Reading {
-  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'other']
+  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'return', 'other']
   const statuses: OrderStatus[] = ['ordered', 'shipped', 'out_for_delivery', 'delivered', 'delayed', 'cancelled']
   const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null)
-  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in)
+  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return)
+  const stages: ReturnStage[] = ['started', 'dropped_off', 'refunded']
   const itemKinds = ['flight', 'hotel', 'car', 'drive', 'food', 'event', 'other']
   return {
     kind: kinds.includes(r.kind as Kind) ? r.kind as Kind : 'other',
     confident: r.confident !== false,
     summary: isText(r.summary) ?? '',
     existing_order_id: isText(r.existing_order_id),
+    existing_return_id: isText(r.existing_return_id),
     order: o && {
       store: isText(o.store), order_number: isText(o.order_number), items: isText(o.items), total: isNum(o.total),
       ordered_on: isDay(o.ordered_on), status: statuses.includes(o.status as OrderStatus) ? o.status as OrderStatus : null,
@@ -574,6 +605,10 @@ function clean(r: Record<string, unknown>): Reading {
     money_in: mi && {
       amount: isNum(mi.amount), from: isText(mi.from), received_on: isDay(mi.received_on), via: isText(mi.via), is_paycheck: mi.is_paycheck === true, account_hint: isText(mi.account_hint),
     },
+    ret: rt && {
+      stage: stages.includes(rt.stage as ReturnStage) ? rt.stage as ReturnStage : null, store: isText(rt.store), order_number: isText(rt.order_number),
+      items: isText(rt.items), amount: isNum(rt.amount), date: isDay(rt.date), drop_off_by: isDay(rt.drop_off_by), refund_method: isText(rt.refund_method),
+    },
   }
 }
 
@@ -582,6 +617,41 @@ function clean(r: Record<string, unknown>): Reading {
 // ---------------------------------------------------------------------------
 
 interface Outcome { id: string; status: string; kind: string | null; summary: string; error?: string }
+
+// --- returns ---
+const STAGE_RANK: Record<ReturnStage, number> = { started: 0, dropped_off: 1, refunded: 2 }
+const words = (s: string | null | undefined) => new Set((s ?? '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !/^\d+$/.test(w)))
+/** "Zeerobee Curtain Rods 72-144" and "Zeerobee Curtain Rods" are the same items. */
+export function sameItems(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = words(a), y = words(b)
+  if (!x.size || !y.size) return false
+  let shared = 0
+  for (const w of x) if (y.has(w)) shared++
+  return shared >= Math.min(2, Math.min(x.size, y.size))
+}
+export function findReturn(list: ReturnRow[], x: ReturnInfo, aiId: string | null): ReturnRow | undefined {
+  const byId = list.find((r) => r.id === aiId)
+  if (byId && storeMatch(byId.store, x.store ?? byId.store)) return byId
+  const store = list.filter((r) => storeMatch(r.store, x.store))
+  return store.find((r) => x.order_number && r.order_number && numKey(r.order_number) === numKey(x.order_number) && (!x.items || !r.items || sameItems(r.items, x.items)))
+    ?? store.find((r) => sameItems(r.items, x.items))
+    ?? (!x.items && !x.order_number ? (() => { const open = store.filter((r) => r.status !== 'refunded'); return open.length === 1 ? open[0] : undefined })() : undefined)
+}
+export function findOrderFor(list: PastOrder[], x: ReturnInfo, aiId: string | null): PastOrder | undefined {
+  return list.find((o) => o.id === aiId)
+    ?? list.find((o) => x.order_number && o.order_number && numKey(o.order_number) === numKey(x.order_number))
+    ?? list.find((o) => storeMatch(o.store, x.store) && sameItems(o.items, x.items))
+}
+/** Where the refund goes back to: 'c:<card>', 'a:<account>', 'p:<afterpay plan>', 'none' (gift card), or null (ask). */
+export function refundGuess(x: ReturnInfo, order: PastOrder | undefined, cards: { id: string; last4: string | null }[]): string | null {
+  const hint = (x.refund_method ?? '').toLowerCase()
+  if (/gift card|store credit|amazon balance|gift balance|promotional/.test(hint)) return 'none'
+  if (order?.afterpay_order_id) return `p:${order.afterpay_order_id}`
+  const last4 = hint.match(/(\d{4})\b/)?.[1]
+  const card = last4 ? cards.find((c) => c.last4 === last4) : undefined
+  if (card) return `c:${card.id}`
+  return order?.pay_with ?? null
+}
 
 async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Promise<Outcome> {
   const done = async (patch: Record<string, unknown>): Promise<Outcome> => {
@@ -599,11 +669,15 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
         .or(`end_date.gte.${addDays(today, -3)},end_date.is.null`).order('start_date').limit(20),
       db.from('afterpay_orders').select('id, name, total, created_at').eq('user_id', owner).gte('created_at', since),
     ])
+    // Returns (10_returns.sql). Missing table = not set up yet: carry on without them.
+    const retQ = await db.from('returns').select('id, order_id, store, order_number, items, amount, status, started_on, drop_off_by, dropped_off_on, refunded_on, refund_to')
+      .eq('user_id', owner).or(`status.neq.refunded,refunded_on.gte.${addDays(today, -30)}`).order('created_at', { ascending: false }).limit(30)
+    const returns = ((retQ.error ? [] : retQ.data ?? []) as ReturnRow[]).map((x) => ({ ...x, amount: x.amount === null ? null : Number(x.amount) }))
     const orders = ((ordersQ.data ?? []) as OrderRow[]).map((o) => ({ ...o, total: o.total === null ? null : Number(o.total) }))
     const trips = (tripsQ.data ?? []) as TripRow[]
     const plans = ((apQ.data ?? []) as AfterpayRow[]).map((p) => ({ ...p, total: Number(p.total) }))
 
-    const r = await askClaude(row, today, orders, trips)
+    const r = await askClaude(row, today, orders, trips, returns)
     const summary = r.summary || row.subject || 'Email'
 
     // Reload waiting cards right before deciding, so two emails about one purchase that arrive together still pair up
@@ -613,6 +687,51 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
     }
 
     if (r.kind === 'afterpay_payment') return done({ status: 'auto', kind: r.kind, summary, suggestion: { afterpay: r.afterpay } })
+
+    if (r.kind === 'return' && r.ret && !retQ.error) {
+      const x = r.ret
+      x.store = x.store ?? r.order?.store ?? row.from_name ?? null
+      x.order_number = x.order_number ?? r.order?.order_number ?? null
+      x.items = x.items ?? r.order?.items ?? null
+      const stage: ReturnStage = x.stage ?? 'started'
+      const past = await db.from('orders').select('id, store, order_number, items, total, pay_with, afterpay_order_id')
+        .eq('user_id', owner).gte('created_at', addDays(today, -150)).order('created_at', { ascending: false }).limit(150)
+      const order = findOrderFor(((past.data ?? []) as PastOrder[]), x, r.existing_order_id)
+      const existing = findReturn(returns, x, r.existing_return_id)
+      if (existing?.status === 'refunded') {
+        return done({ status: 'auto', kind: 'return', summary: `${summary} (refund already counted)`, suggestion: { ret: { ...x, return_id: existing.id } } })
+      }
+      if (stage === 'refunded') {
+        const cards = await db.from('cards').select('id, last4').eq('user_id', owner)
+        const ret: ReturnInfo = {
+          ...x, amount: x.amount ?? existing?.amount ?? null, items: x.items ?? existing?.items ?? null,
+          return_id: existing?.id ?? null, order_id: existing?.order_id ?? order?.id ?? null,
+          refund_to: refundGuess(x, order, (cards.data ?? []) as { id: string; last4: string | null }[]) ?? existing?.refund_to ?? null,
+        }
+        return done({ status: r.confident && ret.amount ? 'review' : 'unsure', kind: 'return', summary, suggestion: { ret } })
+      }
+      if (existing) {
+        const patch: Record<string, unknown> = {}
+        if (STAGE_RANK[stage] > STAGE_RANK[existing.status]) patch.status = stage
+        if (stage === 'dropped_off' && !existing.dropped_off_on) patch.dropped_off_on = x.date ?? today
+        if (x.amount !== null && existing.amount === null) patch.amount = x.amount
+        if (x.drop_off_by) patch.drop_off_by = x.drop_off_by
+        if (x.items && !existing.items) patch.items = x.items
+        if (!existing.order_id && order) patch.order_id = order.id
+        if (Object.keys(patch).length) await db.from('returns').update(patch).eq('id', existing.id)
+        return done({ status: 'auto', kind: 'return', summary, suggestion: { ret: { ...x, return_id: existing.id } } })
+      }
+      if (!r.confident || !x.store) return done({ status: 'unsure', kind: 'return', summary, suggestion: { ret: x } })
+      const cards = await db.from('cards').select('id, last4').eq('user_id', owner)
+      const ins = await db.from('returns').insert({
+        user_id: owner, order_id: order?.id ?? null, store: x.store, order_number: x.order_number ?? order?.order_number ?? null,
+        items: x.items ?? order?.items ?? null, amount: x.amount ?? null, status: stage, started_on: x.date ?? today,
+        drop_off_by: x.drop_off_by, dropped_off_on: stage === 'dropped_off' ? (x.date ?? today) : null,
+        refund_to: refundGuess(x, order, (cards.data ?? []) as { id: string; last4: string | null }[]),
+      }).select('id').single()
+      if (ins.error) throw new Error(ins.error.message)
+      return done({ status: 'auto', kind: 'return', summary: `${summary} (tracking the refund)`, suggestion: { ret: { ...x, return_id: (ins.data as { id: string }).id } } })
+    }
 
     if ((r.kind === 'order' || r.kind === 'shipping') && r.order?.store) {
       const o = r.order
@@ -686,7 +805,7 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
     // Couldn't place it (or the key details are missing): Jae takes a look
     return done({
       status: 'unsure', kind: r.kind, summary,
-      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in },
+      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in, ret: r.ret },
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -1003,6 +1122,20 @@ async function morningLines(db: SupabaseClient, owner: string, s: AlertSettings,
   if (today.slice(8, 10) === '01') {
     const prev = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 2, 1))
     lines.push(`📊 Your ${prev.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })} recap is ready`)
+  }
+
+  // Returns: drop-off deadline coming up, or a refund that's taking too long (weekly nudge from day 14)
+  const rets = await db.from('returns').select('store, items, amount, status, started_on, drop_off_by, dropped_off_on').eq('user_id', owner).neq('status', 'refunded')
+  for (const x of (rets.error ? [] : rets.data ?? []) as { store: string; items: string | null; amount: number | null; status: string; started_on: string; drop_off_by: string | null; dropped_off_on: string | null }[]) {
+    const what = x.items ? ` (${x.items.length > 30 ? `${x.items.slice(0, 28)}…` : x.items})` : ''
+    if (x.status === 'started' && x.drop_off_by) {
+      const n = diffDays(today, x.drop_off_by)
+      if (n >= 0 && n <= 2) lines.push(`📦 Drop off your ${x.store} return${what} ${n === 0 ? 'today' : n === 1 ? 'by tomorrow' : `by ${wd(x.drop_off_by)}`}`)
+    }
+    if (x.status === 'dropped_off') {
+      const n = diffDays(x.dropped_off_on ?? x.started_on, today)
+      if (n >= 14 && (n - 14) % 7 === 0) lines.push(`↩️ Still waiting on ${x.amount ? `${money$(Number(x.amount))} ` : 'a '}refund from ${x.store}${what}, ${n} days`)
+    }
   }
 
   const orders = await db.from('orders').select('store, status, expected_on').eq('user_id', owner).in('status', ['ordered', 'shipped', 'out_for_delivery', 'delayed'])

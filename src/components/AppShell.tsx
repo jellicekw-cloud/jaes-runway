@@ -135,7 +135,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     showToast(line)
     await Promise.all([
       reloadInbox(),
-      kind === 'order' || kind === 'afterpay' || kind === 'money_in' ? reloadMoney() : Promise.resolve(),
+      kind === 'order' || kind === 'afterpay' || kind === 'money_in' || kind === 'return' ? reloadMoney() : Promise.resolve(),
       kind === 'appointment' ? reloadPlans() : Promise.resolve(),
       kind === 'trip' ? reloadTrips() : Promise.resolve(),
     ])

@@ -84,7 +84,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     cards: ((cards.data ?? []) as Card[]).map((c) => ({ ...c, balance: num(c.balance), credit_limit: num(c.credit_limit), minimum_payment: num(c.minimum_payment), apr: num(c.apr) })),
     bills: ((bills.data ?? []) as Bill[]).map((b) => ({ ...b, amount: num(b.amount) })),
     subs: ((subs.data ?? []) as Subscription[]).map((s) => ({ ...s, amount: Number(s.amount) })),
-    orders: ((orders.data ?? []) as AfterpayOrder[]).map((o) => ({ ...o, total: Number(o.total) })),
+    orders: ((orders.data ?? []) as AfterpayOrder[]).map((o) => ({ ...o, total: Number(o.total), refunded: Number(o.refunded ?? 0) })),
     payments: ((payments.data ?? []) as Payment[]).map((p) => ({ ...p, amount: Number(p.amount) })),
     challenge: ch ? { ...ch, first_amount: Number(ch.first_amount), step_amount: Number(ch.step_amount) } : null,
     deposits: ((deposits.data ?? []) as SavingsDeposit[]).map((x) => ({ ...x, amount: Number(x.amount) })),
@@ -122,11 +122,16 @@ export interface Obligation {
 
 export const AFTERPAY_COLOR = '#0EA5E9'
 
-/** Splits an Afterpay total into equal installments; any leftover cents go on the last one. */
-export function installmentAmount(order: Pick<AfterpayOrder, 'total' | 'installments'>, n: number): number {
+/** Splits an Afterpay total into equal installments; any leftover cents go on the last one.
+ *  A refund comes off the last payments first (that's how Afterpay does it). */
+export function installmentAmount(order: Pick<AfterpayOrder, 'total' | 'installments'> & { refunded?: number }, n: number): number {
   const base = Math.floor((order.total * 100) / order.installments) / 100
-  if (n < order.installments) return base
-  return round2(order.total - base * (order.installments - 1))
+  const plain = (k: number) => (k < order.installments ? base : round2(order.total - base * (order.installments - 1)))
+  const refunded = order.refunded ?? 0
+  if (!refunded) return plain(n)
+  let later = 0
+  for (let k = n + 1; k <= order.installments; k++) later += plain(k)
+  return round2(Math.max(0, plain(n) - Math.max(0, refunded - later)))
 }
 
 export function installmentDate(order: Pick<AfterpayOrder, 'order_date' | 'interval_days'>, n: number): string {
@@ -190,6 +195,7 @@ export function obligationsOn(d: MoneyData, date: string, today: string): Obliga
     for (let n = 1; n <= o.installments; n++) {
       if (installmentDate(o, n) !== date) continue
       const payment = d.payments.find((p) => p.afterpay_order_id === o.id && p.installment_no === n)
+      if (!payment && installmentAmount(o, n) <= 0) continue   // refunded
       out.push({
         key: `afterpay:${o.id}:${n}`, kind: 'afterpay', sourceId: o.id, date, name: `Afterpay · ${o.name}`, short: 'Afterpay',
         color: AFTERPAY_COLOR, amount: installmentAmount(o, n), installmentNo: n, installments: o.installments, payment,

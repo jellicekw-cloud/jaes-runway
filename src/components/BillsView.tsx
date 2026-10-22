@@ -391,15 +391,15 @@ function QuickPay({ o, m, run }: { o: ReturnType<typeof obligationsOn>[number]; 
 function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: MoneyData; today: string; run: Run }) {
   const tiles = Array.from({ length: o.installments }, (_, i) => i + 1).map((n) => {
     const date = installmentDate(o, n)
-    const ob = obligationsOn(m, date, today).find((x) => x.kind === 'afterpay' && x.sourceId === o.id && x.installmentNo === n)!
+    const ob = obligationsOn(m, date, today).find((x) => x.kind === 'afterpay' && x.sourceId === o.id && x.installmentNo === n)   // none = refunded
     return { n, date, ob }
   })
-  const paid = tiles.filter((t) => t.ob.status === 'paid').length
+  const paid = tiles.filter((t) => !t.ob || t.ob.status === 'paid').length
   const from = o.account_id ? m.accounts.find((a) => a.id === o.account_id)?.institution : o.card_id ? m.cards.find((c) => c.id === o.card_id)?.name : null
   const bought = m.transactions.find((x) => x.afterpay_order_id === o.id)?.occurred_on
   const [editDates, setEditDates] = useState(false)
   const [open, setOpen] = useRemembered(`runway-ap-open-${o.id}`, false)
-  const next = tiles.find((t) => t.ob.status !== 'paid')
+  const next = tiles.find((t) => t.ob && t.ob.status !== 'paid')
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0">
@@ -419,11 +419,12 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
           <span className="text-muted tnum">{paid} of {o.installments} paid</span>
           {next ? (
             <>
-              <b className={`tnum ${next.ob.status === 'overdue' ? 'text-bad' : ''}`}>· Next {money(next.ob.amount)} {next.ob.status === 'overdue' ? 'was due' : 'on'} {shortDate(next.date)}</b>
-              <button type="button" onClick={() => void run(() => markPaid(m, next.ob, next.ob.amount ?? 0))}
+              <b className={`tnum ${next.ob!.status === 'overdue' ? 'text-bad' : ''}`}>· Next {money(next.ob!.amount)} {next.ob!.status === 'overdue' ? 'was due' : 'on'} {shortDate(next.date)}</b>
+              <button type="button" onClick={() => void run(() => markPaid(m, next.ob!, next.ob!.amount ?? 0))}
                 className="ml-auto h-8 px-3 rounded-lg border-0 bg-accent text-accent-ink text-xs font-bold cursor-pointer">Mark paid</button>
             </>
-          ) : <b className="text-pay-ink">· Paid off 🎉</b>}
+          ) : <b className="text-pay-ink">· {o.refunded ? 'Done (refunded)' : 'Paid off 🎉'}</b>}
+          {Boolean(o.refunded) && next && <span className="basis-full text-xs text-muted">↩️ {money(o.refunded)} refunded off the last payments</span>}
         </div>
       )}
       {open && (<div id={`ap-${o.id}-details`} className="flex flex-col gap-3">
@@ -441,7 +442,13 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
         )}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-        {tiles.map(({ n, date, ob }) => (
+        {tiles.map(({ n, date, ob }) => !ob ? (
+          <div key={n} className="flex flex-col gap-1 rounded-xl border border-line border-dashed p-2 text-sm tnum text-muted">
+            <b>{shortDate(date)}</b>
+            <span>{money(0)}</span>
+            <span className="h-7 grid place-items-center text-xs font-bold">↩️ Refunded</span>
+          </div>
+        ) : (
           <div key={n} className={`flex flex-col gap-1 rounded-xl border p-2 text-sm tnum ${ob.status === 'paid' ? 'border-pay text-pay-ink' : ob.status === 'overdue' ? 'border-bad text-bad' : 'border-line'}`}>
             <b>{shortDate(date)}</b>
             <span>{money(ob.amount)}</span>
