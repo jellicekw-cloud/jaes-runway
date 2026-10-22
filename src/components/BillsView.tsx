@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { PaydownCard, PaydownPlan } from './Paydown'
+import { DebtProgress, MilestoneBanner, StatementNudge } from './Progress'
 import { addDays, money, shortDate } from '../lib/dates'
 import {
   type TripCost, addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
@@ -54,7 +55,9 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
         </p>
       )}
 
+      <MilestoneBanner m={m} today={today} />
       <PaydownCard m={m} today={today} tripCosts={tripCosts} reloadMoney={reloadMoney} />
+      <StatementNudge m={m} today={today} />
 
       <Section title="Overview">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -80,6 +83,7 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
       </Section>
 
       <Section title="Paydown plan" id="paydown" right={<span className="font-bold tnum text-pay-ink">highest interest first</span>}>
+        <DebtProgress m={m} today={today} />
         <PaydownPlan m={m} today={today} tripCosts={tripCosts} reloadMoney={reloadMoney} />
       </Section>
 
@@ -328,6 +332,8 @@ function CardEditor({ card: c, m, today, run, onOpenDay }: { card: Card; m: Mone
         <Field id={`${pre}-apr`} label="APR %" value={c.apr} onCommit={(v) => void save({ apr: parseMoney(v) })} />
         <Field id={`${pre}-l4`} label="Last 4" value={c.last4} placeholder="••••"
           onCommit={(v) => { const d = v.replace(/\D/g, ''); if (d === '' || d.length === 4) void save({ last4: d || null }) }} />
+        <Field id={`${pre}-stmt`} label="Statement closes" value={c.statement_day ?? null} kind="number" placeholder="day"
+          onCommit={(v) => { const n = parseInt(v, 10); if (!v.trim()) void save({ statement_day: null }); else if (n >= 1 && n <= 31) void save({ statement_day: n }) }} />
       </div>
 
       <div className="flex flex-col gap-1.5 text-sm text-muted">

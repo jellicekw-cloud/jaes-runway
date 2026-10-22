@@ -23,7 +23,11 @@ export interface MoneyData {
   income: Income[]
   incomeSources: IncomeSource[]
   extraPayments: ExtraPayment[]
+  cardHistory: CardSnapshot[]
 }
+
+/** A card's balance on a day (saved automatically when the balance changes; 09_progress.sql). */
+export interface CardSnapshot { card_id: string; recorded_on: string; balance: number }
 
 /** A payment toward a card on top of its minimum (from the payday paydown suggestion, or by hand). */
 export interface ExtraPayment { id: string; card_id: string; amount: number; paid_on: string; account_id: string | null; created_at: string }
@@ -38,7 +42,7 @@ export interface IncomeSource { id: string; name: string; account_id: string | n
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [],
+  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [],
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
@@ -65,11 +69,12 @@ export async function loadMoney(today: string): Promise<MoneyData> {
   const failed = [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions].find((r) => r.error)
   if (failed?.error) throw failed.error
   // Money in: tables come from 05_money_in.sql; until that's run, there's simply no money in yet
-  const [inc, srcs, extra] = await Promise.all([
+  const [inc, srcs, extra, hist] = await Promise.all([
     supabase.from('income').select('id, received_on, amount, kind, from_name, account_id, income_source_id, expected_on, note, created_at')
       .gte('received_on', since).order('received_on', { ascending: false }).order('created_at', { ascending: false }),
     supabase.from('income_sources').select('id, name, account_id, days, expected_amount, is_active').eq('is_active', true).order('created_at'),
     supabase.from('card_extra_payments').select('id, card_id, amount, paid_on, account_id, created_at').order('paid_on', { ascending: false }),   // from 08_paydown.sql
+    supabase.from('card_balance_history').select('card_id, recorded_on, balance').gte('recorded_on', addDays(today, -400)).order('recorded_on'),   // from 09_progress.sql
   ])
   const ch = ((challenges.data ?? []) as SavingsChallenge[])[0]
   return {
@@ -85,6 +90,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     deposits: ((deposits.data ?? []) as SavingsDeposit[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     transactions: ((transactions.data ?? []) as Transaction[]).map((t) => ({ ...t, amount: Number(t.amount) })),
     income: inc.error ? [] : ((inc.data ?? []) as Income[]).map((x) => ({ ...x, amount: Number(x.amount) })),
+    cardHistory: hist.error ? [] : ((hist.data ?? []) as CardSnapshot[]).map((x) => ({ ...x, balance: Number(x.balance) })),
     extraPayments: extra.error ? [] : ((extra.data ?? []) as ExtraPayment[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     incomeSources: srcs.error ? [] : ((srcs.data ?? []) as IncomeSource[]).map((x) => ({ ...x, expected_amount: num(x.expected_amount), days: (x.days ?? []).map(Number) })),
   }

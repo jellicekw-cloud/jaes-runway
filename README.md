@@ -66,4 +66,5 @@ supabase/
 13. ✅ Phone notifications (Android/Chrome): 7 am summary, Inbox right away, bills the evening before, side work check; quiet hours; 🔔 panel with switches. Setup: ALERTS_SETUP.md
 14. ✅ Can I afford it? (phone Home, Money tab): walks each account day by day to the next payday (bills, auto-pay, Afterpay, savings, trip costs, paychecks, expected side work), $250 cushion, suggests the day it fits; Afterpay plan and card % used (30% line)
 15. ✅ Card paydown: on payday (and 2 days after) suggests 40% of what's safely extra in NFCU (above the $250 cushion through next payday), highest APR first; I paid it / Not this time; Bills paydown plan (debt-free date, interest, minimums only vs extra each payday, history with Undo). Setup: run supabase/08_paydown.sql
+16. ✅ Paydown progress (balance history chart, interest avoided, confetti when a card is paid off or drops under 30%), statement-closing nudge (pay $X to report under 30%; app + morning summary), monthly recap (Home on the 1st–3rd, Money tab, morning summary line). Setup: run supabase/09_progress.sql, re-paste the reader
 8. Later: alerts, "ask it" (can I afford this?), confirmation-email import

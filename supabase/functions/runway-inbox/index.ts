@@ -988,6 +988,23 @@ async function morningLines(db: SupabaseClient, owner: string, s: AlertSettings,
   const side = await sideWorkWaiting(db, owner, today)
   if (side.length) lines.push(`💵 ${side.map((x) => x.name).join(', ')} expected today`)
 
+  // Statement closing in the next 3 days on a card over 30% used (09_progress.sql adds statement_day)
+  const stmt = await db.from('cards').select('name, balance, credit_limit, statement_day').eq('user_id', owner).eq('is_active', true)
+  for (const c of (stmt.data ?? []) as { name: string; balance: number | null; credit_limit: number | null; statement_day: number | null }[]) {
+    const bal = Number(c.balance ?? 0), limit = Number(c.credit_limit ?? 0)
+    if (!c.statement_day || bal <= 0 || !limit) continue
+    for (let i = 0; i <= 3; i++) {
+      const k = addDays(today, i)
+      if (!dueOn(c.statement_day, k)) continue
+      if (bal / limit > 0.3) lines.push(`🧾 ${c.name} statement closes ${i === 0 ? 'today' : i === 1 ? 'tomorrow' : wd(k)}: pay ${money$(Math.ceil(bal - 0.29 * limit))} to report under 30%`)
+      break
+    }
+  }
+  if (today.slice(8, 10) === '01') {
+    const prev = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 2, 1))
+    lines.push(`📊 Your ${prev.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })} recap is ready`)
+  }
+
   const orders = await db.from('orders').select('store, status, expected_on').eq('user_id', owner).in('status', ['ordered', 'shipped', 'out_for_delivery', 'delayed'])
   const coming = ((orders.data ?? []) as { store: string; status: string; expected_on: string | null }[])
     .filter((o) => o.status === 'out_for_delivery' || (o.expected_on && o.expected_on <= today))

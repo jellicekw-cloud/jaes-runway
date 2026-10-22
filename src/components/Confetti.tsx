@@ -16,7 +16,7 @@ const prefersLessMotion = () => {
   try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
 }
 
-function Burst({ onDone }: { onDone: () => void }) {
+export function Burst({ onDone }: { onDone: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const done = useRef(onDone)
   done.current = onDone

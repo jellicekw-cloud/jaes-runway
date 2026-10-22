@@ -22,6 +22,7 @@ import { BirthdayCelebration } from './Confetti'
 import { BellButton, NotificationsPanel } from './Notifications'
 import AffordCheck from './AffordCheck'
 import { PaydownCard } from './Paydown'
+import { MilestoneBanner, RecapCard, StatementNudge } from './Progress'
 
 type Tab = 'week' | 'bills' | 'money' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
@@ -227,7 +228,10 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           </>}
           orders={inbox.orders} dates={dates} onBell={() => setNotifOpen(true)}
           homeAfford={moneyLoaded ? <>
+            <MilestoneBanner m={moneyData} today={today} />
             <PaydownCard m={moneyData} today={today} tripCosts={tripCosts} reloadMoney={reloadMoney} onToast={showToast} />
+            <StatementNudge m={moneyData} today={today} />
+            <RecapCard m={moneyData} today={today} homeOnly />
             <AffordCheck m={moneyData} today={today} tripCosts={tripCosts} compact />
           </> : null}
           homeDates={comingSoon ? null : <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
@@ -333,7 +337,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       )}
       {tab === 'bills' && <BillsView tripCosts={tripCosts} today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}
-      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} afford={<AffordCheck m={moneyData} today={today} tripCosts={tripCosts} />} />}
+      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} afford={<><AffordCheck m={moneyData} today={today} tripCosts={tripCosts} /><RecapCard m={moneyData} today={today} /></>} />}
 
       {shared}
     </div>

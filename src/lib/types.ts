@@ -80,6 +80,7 @@ export interface Card {
   color: string
   tracking_since: string
   is_active: boolean
+  statement_day?: number | null   // day the statement closes (09_progress.sql)
 }
 
 export interface Bill {
