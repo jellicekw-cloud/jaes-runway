@@ -200,7 +200,7 @@ export default function LogPurchase({ open, onClose, mode, onMode, reloadPlans, 
 
         <label htmlFor="lp-what" className="flex flex-col gap-1.5">
           <span className="text-xs font-bold tracking-widest uppercase text-muted">What was it</span>
-          <input id="lp-what" value={what} onChange={(e) => setWhat(e.target.value)} placeholder={category === SENT_CATEGORY ? 'Who + what for, e.g. Chicken · gas money' : 'e.g. Gas, groceries, nails'} autoComplete="off"
+          <input id="lp-what" value={what} onChange={(e) => setWhat(e.target.value)} placeholder={category === SENT_CATEGORY ? 'Who + what for, e.g. Chicken · dinner' : 'e.g. Charging, groceries, nails'} autoComplete="off"
             className="h-11 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi" />
         </label>
 
