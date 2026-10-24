@@ -24,7 +24,11 @@ export interface MoneyData {
   incomeSources: IncomeSource[]
   extraPayments: ExtraPayment[]
   cardHistory: CardSnapshot[]
+  transfers: Transfer[]
 }
+
+/** Money you moved into or out of savings yourself (11_savings.sql). */
+export interface Transfer { id: string; from_account_id: string | null; to_account_id: string | null; amount: number; moved_on: string; note: string | null; created_at: string }
 
 /** A card's balance on a day (saved automatically when the balance changes; 09_progress.sql). */
 export interface CardSnapshot { card_id: string; recorded_on: string; balance: number }
@@ -42,7 +46,7 @@ export interface IncomeSource { id: string; name: string; account_id: string | n
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [],
+  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [], transfers: [],
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
@@ -55,7 +59,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
   const since = addDays(today, -HISTORY_DAYS)
   const [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions] = await Promise.all([
     supabase.from('settings').select('*').maybeSingle(),
-    supabase.from('accounts').select('id, name, institution, kind, balance, balance_as_of, role_note, sort').eq('is_active', true).order('sort'),
+    supabase.from('accounts').select('*').eq('is_active', true).order('sort'),
     supabase.from('paycheck_splits').select('id, account_id, amount'),
     supabase.from('cards').select('*').eq('is_active', true).order('due_day'),
     supabase.from('bills').select('*').eq('is_active', true).order('due_day'),
@@ -69,17 +73,18 @@ export async function loadMoney(today: string): Promise<MoneyData> {
   const failed = [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions].find((r) => r.error)
   if (failed?.error) throw failed.error
   // Money in: tables come from 05_money_in.sql; until that's run, there's simply no money in yet
-  const [inc, srcs, extra, hist] = await Promise.all([
+  const [inc, srcs, extra, hist, moves] = await Promise.all([
     supabase.from('income').select('id, received_on, amount, kind, from_name, account_id, income_source_id, expected_on, note, created_at')
       .gte('received_on', since).order('received_on', { ascending: false }).order('created_at', { ascending: false }),
     supabase.from('income_sources').select('id, name, account_id, days, expected_amount, is_active').eq('is_active', true).order('created_at'),
     supabase.from('card_extra_payments').select('id, card_id, amount, paid_on, account_id, created_at').order('paid_on', { ascending: false }),   // from 08_paydown.sql
     supabase.from('card_balance_history').select('card_id, recorded_on, balance').gte('recorded_on', addDays(today, -400)).order('recorded_on'),   // from 09_progress.sql
+    supabase.from('transfers').select('id, from_account_id, to_account_id, amount, moved_on, note, created_at').gte('moved_on', since).order('moved_on', { ascending: false }),   // from 11_savings.sql
   ])
   const ch = ((challenges.data ?? []) as SavingsChallenge[])[0]
   return {
     settings: settings.data as Settings | null,
-    accounts: ((accounts.data ?? []) as Account[]).map((a) => ({ ...a, balance: num(a.balance) })),
+    accounts: ((accounts.data ?? []) as Account[]).map((a) => ({ ...a, balance: num(a.balance), auto_amount: num(a.auto_amount), goal_amount: num(a.goal_amount), auto_every_days: a.auto_every_days ?? 14 })),
     splits: ((splits.data ?? []) as PaycheckSplit[]).map((s) => ({ ...s, amount: Number(s.amount) })),
     cards: ((cards.data ?? []) as Card[]).map((c) => ({ ...c, balance: num(c.balance), credit_limit: num(c.credit_limit), minimum_payment: num(c.minimum_payment), apr: num(c.apr) })),
     bills: ((bills.data ?? []) as Bill[]).map((b) => ({ ...b, amount: num(b.amount) })),
@@ -92,6 +97,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     income: inc.error ? [] : ((inc.data ?? []) as Income[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     cardHistory: hist.error ? [] : ((hist.data ?? []) as CardSnapshot[]).map((x) => ({ ...x, balance: Number(x.balance) })),
     extraPayments: extra.error ? [] : ((extra.data ?? []) as ExtraPayment[]).map((x) => ({ ...x, amount: Number(x.amount) })),
+    transfers: moves.error ? [] : ((moves.data ?? []) as Transfer[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     incomeSources: srcs.error ? [] : ((srcs.data ?? []) as IncomeSource[]).map((x) => ({ ...x, expected_amount: num(x.expected_amount), days: (x.days ?? []).map(Number) })),
   }
 }
@@ -202,6 +208,15 @@ export function obligationsOn(d: MoneyData, date: string, today: string): Obliga
         status: statusFor(date, today, Boolean(payment)), from: accountLabel(d, o.account_id, o.card_id), fromAccountId: o.account_id,
       })
     }
+  }
+
+  // Automatic transfers into savings (DECU): shown like auto-pay, out of the account they come from
+  for (const a of d.accounts) {
+    if (!autoTransferOn(a, date)) continue
+    out.push({
+      key: `save:${a.id}:${date}`, kind: 'sub', sourceId: a.id, date, name: `${a.institution ?? a.name} savings`, short: `${a.institution ?? a.name} savings`,
+      color: '#16A34A', amount: a.auto_amount!, status: 'auto', from: accountLabel(d, a.auto_from_account_id ?? null, null), fromAccountId: a.auto_from_account_id ?? null,
+    })
   }
 
   for (const s of d.subs) {
@@ -366,7 +381,23 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
 
     const cameIn = d.income.filter((x) => x.account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
     if (cameIn) changes.push({ label: 'Money in', amount: cameIn })
+
+    // Automatic savings transfers on days after the update, through today
+    for (const s of d.accounts) {
+      if (!s.auto_amount || (s.id !== a.id && s.auto_from_account_id !== a.id)) continue
+      let n = 0
+      for (let k = addDays(asOfDate, 1); k <= today; k = addDays(k, 1)) if (autoTransferOn(s, k)) n++
+      if (!n) continue
+      if (s.id === a.id) changes.push({ label: `Auto from ${accountLabel(d, s.auto_from_account_id ?? null, null)}`, amount: round2(n * s.auto_amount) })
+      else changes.push({ label: `Auto to ${s.institution ?? s.name}`, amount: -round2(n * s.auto_amount) })
+    }
   }
+
+  // Money you moved yourself (into or out of savings)
+  const movedIn = d.transfers.filter((x) => x.to_account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
+  const movedOut = d.transfers.filter((x) => x.from_account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
+  if (movedIn) changes.push({ label: 'Moved in', amount: round2(movedIn) })
+  if (movedOut) changes.push({ label: 'Moved out', amount: -round2(movedOut) })
 
   const ch = d.challenge
   if (ch) {
@@ -377,6 +408,31 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
 
   const base = a.balance ?? 0
   return { entered: a.balance, asOf: a.balance_as_of, estimate: round2(base + changes.reduce((t, c) => t + c.amount, 0)), changes }
+}
+
+/** A savings account's automatic transfer lands on this day. */
+export function autoTransferOn(a: Account, date: string): boolean {
+  return Boolean(a.auto_amount && a.auto_from_account_id && a.auto_next_on && isRepeatingOnOrBefore(a.auto_next_on, a.auto_every_days ?? 14, date))
+}
+/** Every N days from a reference day, in both directions (the day you type can be the next one or a past one). */
+function isRepeatingOnOrBefore(ref: string, every: number, date: string): boolean {
+  const diff = daysBetween(ref, date)
+  return ((diff % every) + every) % every === 0
+}
+
+export async function setAutoTransfer(accountId: string, f: { auto_amount: number | null; auto_next_on: string | null }): Promise<void> {
+  const { error } = await supabase.from('accounts').update(f).eq('id', accountId)
+  if (error) throw error
+}
+
+export async function addTransfer(f: { from_account_id: string | null; to_account_id: string | null; amount: number; moved_on: string; note?: string | null }): Promise<void> {
+  const { error } = await supabase.from('transfers').insert({ ...f, amount: round2(f.amount), note: f.note?.trim() || null })
+  if (error) throw error
+}
+
+export async function deleteTransfer(id: string): Promise<void> {
+  const { error } = await supabase.from('transfers').delete().eq('id', id)
+  if (error) throw error
 }
 
 export async function setAccountBalance(accountId: string, balance: number | null): Promise<void> {

@@ -6,6 +6,7 @@ import {
 } from '../lib/money'
 import type { Account, Transaction } from '../lib/types'
 import { MoneyInSection } from './MoneyIn'
+import { SavingsSection } from './Savings'
 
 interface Props {
   today: string
@@ -70,6 +71,8 @@ export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog,
           Estimated from the balance you last entered, plus paychecks, minus auto-pay, purchases, bills and savings since. Enter the real number from your bank app anytime and it resets.
         </p>
       </section>
+
+      <SavingsSection m={m} today={today} hide={hide} run={run} />
 
       {/* Savings challenge */}
       {m.challenge && (
