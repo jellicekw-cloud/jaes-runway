@@ -50,7 +50,8 @@ export interface SavingsChallenge {
 
 export interface SavingsDeposit { id: string; challenge_id: string; deposit_no: number; amount: number; saved_on: string; created_at: string }
 
-export const CATEGORIES = ['Food', 'Gas', 'Shopping', 'Beauty', 'Home', 'Kids', 'Fun', 'Other'] as const
+export const CATEGORIES = ['Food', 'Gas', 'Shopping', 'Beauty', 'Home', 'Kids', 'Fun', 'Rides', 'Sent to people', 'Other'] as const
+export const SENT_CATEGORY = 'Sent to people'   // Zelle / Cash App you send
 
 export interface Transaction {
   id: string

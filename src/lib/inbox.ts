@@ -3,6 +3,7 @@ import { DAYS, addDays, dateOf, daysBetween, shortDate } from './dates'
 import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, installmentAmount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
 import { timeLabel } from './plans'
 import { createTrip, saveItem, type ItemKind, type PassType } from './trips'
+import { SENT_CATEGORY } from './types'
 
 // The email Inbox and packages on the way.
 // Emails arrive through the runway-inbox Edge Function (forwarded or pasted) and wait here for review.
@@ -51,13 +52,19 @@ export interface MoneyInInfo {
   amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null
   account_id?: string | null; income_kind?: IncomeKind | null   // set when you review it
 }
+export interface MoneyOutInfo {
+  amount: number | null; to: string | null; sent_on: string | null; via: string | null; note: string | null; account_hint: string | null
+  status?: 'sent' | 'requested' | 'failed'
+  account_id?: string | null   // set when you review it
+}
+export const VIA_LABEL: Record<string, string> = { zelle: 'Zelle', cashapp: 'Cash App', venmo: 'Venmo' }
 export interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  ret?: ReturnInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 
 export type EmailStatus = 'reading' | 'review' | 'unsure' | 'auto' | 'added' | 'skipped' | 'merged' | 'error'
-export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip' | 'money_in' | 'return'
+export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return'
 
 export interface InboxEmail {
   id: string; source: 'forward' | 'paste'; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null
@@ -206,6 +213,10 @@ export function needsFixing(kind: CardKind, s: Suggestion, trips: { id: string }
     if (!s.money_in?.amount || s.money_in.amount <= 0) return 'Add the amount.'
     if (!s.money_in.account_id) return 'Pick which account it went into.'
   }
+  if (kind === 'money_out') {
+    if (!s.money_out?.amount || s.money_out.amount <= 0) return 'Add the amount.'
+    if (!s.money_out.account_id) return 'Pick which account it came out of.'
+  }
   if (kind === 'return') {
     const x = s.ret
     if (!x?.store?.trim()) return 'Add the store name.'
@@ -287,6 +298,13 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
     if (error) throw error
     await finish(e, s, kind)
     return `${a.title} added to ${shortDate(a.date!)}`
+  }
+
+  if (kind === 'money_out') {
+    const x = s.money_out!
+    await logPurchase(m, { amount: x.amount!, description: moneyOutText(x), category: SENT_CATEGORY, date: x.sent_on ?? today, with: { kind: 'account', id: x.account_id! } })
+    await finish(e, s, kind)
+    return `Money out · $${x.amount!.toFixed(2)} logged`
   }
 
   if (kind === 'return') {
@@ -537,4 +555,23 @@ export async function applyRefund(m: MoneyData, x: ReturnInfo, today: string): P
     })
     if (error) throw error
   }
+}
+
+// ---------------------------------------------------------------------------
+// Money out (Zelle / Cash App you send)
+// ---------------------------------------------------------------------------
+
+/** "Chicken · gas money (Zelle)" — what shows in your spending log. */
+export function moneyOutText(x: MoneyOutInfo): string {
+  const via = x.via ? VIA_LABEL[x.via] : null
+  return `${x.to?.trim() || 'Sent'}${x.note?.trim() ? ` · ${x.note.trim()}` : ''}${via ? ` (${via})` : ''}`
+}
+
+/** Which account it came out of: the one the email names, else NFCU (Zelle and Cash App both pay from it). */
+export function moneyOutDefaults(x: MoneyOutInfo, m: MoneyData): MoneyOutInfo {
+  if (x.account_id) return x
+  const hint = (x.account_hint ?? '').toLowerCase()
+  const byHint = hint ? m.accounts.find((a) => a.kind === 'checking' && ((a.institution ?? a.name).toLowerCase().split(/\s+/).some((w) => w.length > 2 && hint.includes(w))
+    || (hint.includes('navy') && (a.institution ?? '').toLowerCase() === 'nfcu'))) : undefined
+  return { ...x, account_id: byHint?.id ?? billsAccountId(m) }
 }

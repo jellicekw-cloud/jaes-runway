@@ -4,10 +4,10 @@ import { INCOME_KIND_LABEL, installmentAmount, type IncomeKind, type MoneyData }
 import { timeLabel } from '../lib/plans'
 import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
 import {
-  ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, addFromEmail, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
+  ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, VIA_LABEL, addFromEmail, moneyOutDefaults, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
   needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, recentRefunds, refundOptions, refundToFromOrder, refundToLabel, removeOrder, removeReturn,
   rereadEmail, returnLine, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
-  type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
+  type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type ReturnInfo, type ReturnRec, type ReturnStage, type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
 
@@ -32,8 +32,8 @@ function F({ label, wide, children }: { label: string; wide?: boolean; children:
   )
 }
 
-const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', return: '↩️', gmail_confirm: '✉', other: '✉' }
-const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', return: 'Return' }
+const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', money_out: '💸', return: '↩️', gmail_confirm: '✉', other: '✉' }
+const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', money_out: 'Money out', return: 'Return' }
 
 const blankOrder = (store: string | null = null): OrderInfo => ({
   store, order_number: null, items: null, total: null, ordered_on: null, status: 'ordered', carrier: null, tracking_number: null,
@@ -178,6 +178,7 @@ function initialKind(e: InboxEmail): CardKind | null {
   if (e.kind === 'trip') return e.suggestion.trip_item ? 'trip' : null
   if (e.kind === 'money_in') return e.suggestion.money_in ? 'money_in' : null
   if (e.kind === 'return') return e.suggestion.ret ? 'return' : null
+  if (e.kind === 'money_out') return e.suggestion.money_out ? 'money_out' : null
   return null
 }
 
@@ -186,6 +187,10 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
   if (kind === 'money_in') {
     const base = { amount: null, from: who, received_on: null, via: null, is_paycheck: false, account_hint: null }
     return { ...s, money_in: moneyInDefaults({ ...base, ...(s.money_in ?? {}) }, m) }
+  }
+  if (kind === 'money_out') {
+    const base: MoneyOutInfo = { amount: s.money_in?.amount ?? null, to: null, sent_on: s.money_in?.received_on ?? null, via: null, note: null, account_hint: null }
+    return { ...s, money_out: moneyOutDefaults({ ...base, ...(s.money_out ?? {}) }, m) }
   }
   if (kind === 'order') {
     const order = { ...blankOrder(who), ...(s.order ?? {}) }
@@ -204,6 +209,15 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
 }
 
 function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData, m: MoneyData): string[] {
+  if (kind === 'money_out' && s.money_out) {
+    const x = s.money_out
+    const acct = m.accounts.find((a) => a.id === x.account_id)
+    return [
+      `−${x.amount ? money(x.amount) : '?'}${x.to ? ` to ${x.to}` : ''}`,
+      `Sent to people · from ${acct?.institution ?? acct?.name ?? 'pick an account'}${x.via && VIA_LABEL[x.via] ? ` · ${VIA_LABEL[x.via]}` : ''}${x.sent_on ? ` · ${shortDate(x.sent_on)}` : ''}`,
+      x.note ? `For: ${x.note}` : '',
+    ].filter(Boolean)
+  }
   if (kind === 'return' && s.ret) {
     const x = s.ret
     const first = [x.items, x.amount ? `${money(x.amount)} refund` : null].filter(Boolean).join(' · ') || 'Return'
@@ -278,11 +292,14 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
     if (kind === 'money_in' && draft.money_in && !draft.money_in.account_id && m.accounts.length) {
       setDraft((d) => ({ ...d, money_in: moneyInDefaults(d.money_in!, m) }))
     }
+    if (kind === 'money_out' && draft.money_out && !draft.money_out.account_id && m.accounts.length) {
+      setDraft((d) => ({ ...d, money_out: moneyOutDefaults(d.money_out!, m) }))
+    }
     if (kind === 'order' && draft.order && !draft.order.pay_with && draft.order.pay_with !== 'none' && m.accounts.length) {
       const pw = defaultPayWith(m)
       if (pw) setDraft((d) => ({ ...d, order: { ...d.order!, pay_with: d.order!.pay_with || pw } }))
     }
-  }, [kind, draft.money_in, draft.order, m])
+  }, [kind, draft.money_in, draft.money_out, draft.order, m])
 
   function choose(k: CardKind) {
     setKind(k); setDraft(withDefaults(k, e.suggestion, e, m)); setEditing(true); setError('')
@@ -313,6 +330,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
         : kind === 'appointment' ? `Appointment · ${draft.appointment?.title ?? sender(e)}`
           : kind === 'trip' ? `Trip · ${draft.trip_item?.title ?? sender(e)}`
           : kind === 'money_in' ? `Money in · ${draft.money_in?.amount ? money(draft.money_in.amount) : sender(e)}`
+          : kind === 'money_out' ? `Money out · ${draft.money_out?.amount ? money(draft.money_out.amount) : sender(e)}`
           : kind === 'return' ? `${draft.ret?.stage === 'refunded' ? 'Refund' : 'Return'} · ${draft.ret?.store ?? sender(e)}`
             : e.subject || sender(e)
   const icon = KIND_ICON[e.kind === 'gmail_confirm' ? 'gmail_confirm' : kind ?? e.kind ?? 'other'] ?? '✉'
@@ -370,7 +388,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-bold tracking-wider uppercase text-muted">{kind ? 'Adding it as' : 'What is it?'}</span>
               <div className="flex flex-wrap gap-1.5">
-                {(['order', 'afterpay', 'appointment', 'trip', 'money_in', 'return'] as CardKind[]).map((k) => (
+                {(['order', 'afterpay', 'appointment', 'trip', 'money_in', 'money_out', 'return'] as CardKind[]).map((k) => (
                   <button key={k} type="button" aria-pressed={kind === k} onClick={() => choose(k)}
                     className={`h-9 px-3 rounded-full text-sm font-bold cursor-pointer border ${kind === k ? 'bg-accent text-accent-ink border-accent' : 'bg-surface-2 text-fg border-line'}`}>
                     {KIND_NAME[k]}
@@ -405,6 +423,24 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
 function EditForm({ kind, draft, setDraft, trips, today, m }: {
   kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string; m: MoneyData
 }) {
+  if (kind === 'money_out') {
+    const x = draft.money_out!
+    const set = (p: Partial<MoneyOutInfo>) => setDraft((d) => ({ ...d, money_out: { ...d.money_out!, ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="Amount"><input className={inputCls} inputMode="decimal" defaultValue={x.amount ?? ''} onChange={(ev) => set({ amount: toNum(ev.target.value) })} /></F>
+        <F label="Date"><input type="date" className={inputCls} value={x.sent_on ?? today} onChange={(ev) => set({ sent_on: orNull(ev.target.value) })} /></F>
+        <F label="To"><input className={inputCls} value={x.to ?? ''} onChange={(ev) => set({ to: orNull(ev.target.value) })} /></F>
+        <F label="Came out of">
+          <select className={inputCls} value={x.account_id ?? ''} onChange={(ev) => set({ account_id: ev.target.value || null })}>
+            <option value="">Pick an account…</option>
+            {m.accounts.filter((a) => a.kind === 'checking').map((a) => <option key={a.id} value={a.id}>{a.institution ?? a.name}</option>)}
+          </select>
+        </F>
+        <F label="What it's for" wide><input className={inputCls} value={x.note ?? ''} placeholder="e.g. gas money, my half of dinner" onChange={(ev) => set({ note: orNull(ev.target.value) })} /></F>
+      </div>
+    )
+  }
   if (kind === 'return') {
     const x = draft.ret ?? blankReturn()
     const set = (p: Partial<ReturnInfo>) => setDraft((d) => ({ ...d, ret: { ...(d.ret ?? blankReturn()), ...p } }))
