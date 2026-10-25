@@ -124,6 +124,9 @@ export interface AfterpayOrder {
   account_id: string | null
   card_id: string | null
   refunded?: number            // refund taken off the last payments (10_returns.sql)
+  provider?: 'afterpay' | 'affirm'   // 12_affirm.sql
+  interval_months?: number | null    // set = monthly payments (Affirm)
+  payment_amount?: number | null     // set = fixed payment each time (Affirm, interest included)
 }
 
 export interface Payment {

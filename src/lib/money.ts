@@ -89,7 +89,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     cards: ((cards.data ?? []) as Card[]).map((c) => ({ ...c, balance: num(c.balance), credit_limit: num(c.credit_limit), minimum_payment: num(c.minimum_payment), apr: num(c.apr) })),
     bills: ((bills.data ?? []) as Bill[]).map((b) => ({ ...b, amount: num(b.amount) })),
     subs: ((subs.data ?? []) as Subscription[]).map((s) => ({ ...s, amount: Number(s.amount) })),
-    orders: ((orders.data ?? []) as AfterpayOrder[]).map((o) => ({ ...o, total: Number(o.total), refunded: Number(o.refunded ?? 0) })),
+    orders: ((orders.data ?? []) as AfterpayOrder[]).map((o) => ({ ...o, total: Number(o.total), refunded: Number(o.refunded ?? 0), payment_amount: num(o.payment_amount), provider: o.provider ?? 'afterpay' })),
     payments: ((payments.data ?? []) as Payment[]).map((p) => ({ ...p, amount: Number(p.amount) })),
     challenge: ch ? { ...ch, first_amount: Number(ch.first_amount), step_amount: Number(ch.step_amount) } : null,
     deposits: ((deposits.data ?? []) as SavingsDeposit[]).map((x) => ({ ...x, amount: Number(x.amount) })),
@@ -130,9 +130,10 @@ export const AFTERPAY_COLOR = '#0EA5E9'
 
 /** Splits an Afterpay total into equal installments; any leftover cents go on the last one.
  *  A refund comes off the last payments first (that's how Afterpay does it). */
-export function installmentAmount(order: Pick<AfterpayOrder, 'total' | 'installments'> & { refunded?: number }, n: number): number {
+export function installmentAmount(order: Pick<AfterpayOrder, 'total' | 'installments'> & { refunded?: number; payment_amount?: number | null }, n: number): number {
   const base = Math.floor((order.total * 100) / order.installments) / 100
-  const plain = (k: number) => (k < order.installments ? base : round2(order.total - base * (order.installments - 1)))
+  const fixed = order.payment_amount ?? null   // Affirm: the same payment every time
+  const plain = (k: number) => (fixed ? fixed : k < order.installments ? base : round2(order.total - base * (order.installments - 1)))
   const refunded = order.refunded ?? 0
   if (!refunded) return plain(n)
   let later = 0
@@ -140,9 +141,21 @@ export function installmentAmount(order: Pick<AfterpayOrder, 'total' | 'installm
   return round2(Math.max(0, plain(n) - Math.max(0, refunded - later)))
 }
 
-export function installmentDate(order: Pick<AfterpayOrder, 'order_date' | 'interval_days'>, n: number): string {
+export function installmentDate(order: Pick<AfterpayOrder, 'order_date' | 'interval_days'> & { interval_months?: number | null }, n: number): string {
+  if (order.interval_months) return addMonthsKeepDay(order.order_date, (n - 1) * order.interval_months)
   return addDays(order.order_date, (n - 1) * order.interval_days)
 }
+
+/** Same day of the month, k months later (the 31st becomes the last day of a shorter month). */
+export function addMonthsKeepDay(key: string, k: number): string {
+  const [y, m, d] = key.split('-').map(Number)
+  const first = new Date(y, m - 1 + k, 1)
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate()
+  return keyOf(new Date(first.getFullYear(), first.getMonth(), Math.min(d, last)))
+}
+
+export const AFFIRM_COLOR = '#4A4AF4'
+export const planLabel = (o: Pick<AfterpayOrder, 'provider'>) => (o.provider === 'affirm' ? 'Affirm' : 'Afterpay')
 
 export function accountLabel(d: MoneyData, accountId: string | null, cardId: string | null): string {
   if (accountId) {
@@ -203,8 +216,8 @@ export function obligationsOn(d: MoneyData, date: string, today: string): Obliga
       const payment = d.payments.find((p) => p.afterpay_order_id === o.id && p.installment_no === n)
       if (!payment && installmentAmount(o, n) <= 0) continue   // refunded
       out.push({
-        key: `afterpay:${o.id}:${n}`, kind: 'afterpay', sourceId: o.id, date, name: `Afterpay · ${o.name}`, short: 'Afterpay',
-        color: AFTERPAY_COLOR, amount: installmentAmount(o, n), installmentNo: n, installments: o.installments, payment,
+        key: `afterpay:${o.id}:${n}`, kind: 'afterpay', sourceId: o.id, date, name: `${planLabel(o)} · ${o.name}`, short: planLabel(o),
+        color: o.provider === 'affirm' ? AFFIRM_COLOR : AFTERPAY_COLOR, amount: installmentAmount(o, n), installmentNo: n, installments: o.installments, payment,
         status: statusFor(date, today, Boolean(payment)), from: accountLabel(d, o.account_id, o.card_id), fromAccountId: o.account_id,
       })
     }
@@ -595,6 +608,32 @@ export async function addAfterpayOrder(
     occurred_on: purchased_on, amount: fields.total, description: `${fields.name} (Afterpay)`, category, source: 'afterpay', afterpay_order_id: id,
   })
   if (e2) throw e2
+  return id
+}
+
+/**
+ * Adds an Affirm loan: a fixed monthly payment, a number of payments, the next one on first_payment.
+ * A new purchase goes in the spending log once (logSpending); a loan you already had doesn't.
+ */
+export async function addAffirmLoan(
+  f: { name: string; payment: number; payments: number; first_payment: string; account_id: string | null; card_id: string | null; purchased_on?: string; total?: number | null; logSpending?: boolean },
+): Promise<string> {
+  const total = round2(f.total && f.total > 0 ? f.total : f.payment * f.payments)
+  const { data, error } = await supabase.from('afterpay_orders').insert({
+    name: f.name, total, order_date: f.first_payment, installments: f.payments, interval_days: 30, interval_months: 1, payment_amount: round2(f.payment),
+    provider: 'affirm', account_id: f.account_id, card_id: f.card_id,
+  }).select('id').single()
+  if (error) {
+    if (/provider|interval_months|payment_amount/.test(error.message)) throw new Error('Affirm isn\'t set up yet. Run 12_affirm.sql in Supabase first.')
+    throw error
+  }
+  const id = (data as { id: string }).id
+  if (f.logSpending) {
+    const { error: e2 } = await supabase.from('transactions').insert({
+      occurred_on: f.purchased_on ?? f.first_payment, amount: total, description: `${f.name} (Affirm)`, category: 'Shopping', source: 'afterpay', afterpay_order_id: id,
+    })
+    if (e2) throw e2
+  }
   return id
 }
 

@@ -42,13 +42,13 @@ const reply = (body: unknown, status = 200) =>
 // ---------------------------------------------------------------------------
 
 type OrderStatus = 'ordered' | 'shipped' | 'out_for_delivery' | 'delivered' | 'delayed' | 'cancelled'
-type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return' | 'ride' | 'other'
+type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return' | 'ride' | 'affirm' | 'other'
 type ReturnStage = 'started' | 'dropped_off' | 'refunded'
 
 interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
   status: OrderStatus | null; carrier: string | null; tracking_number: string | null; expected_on: string | null
-  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean
+  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean
 }
 interface AfterpayInfo { store: string | null; total: number | null; purchased_on: string | null; first_payment_on: string | null; order_number: string | null }
 interface AppointmentInfo { title: string | null; date: string | null; start_time: string | null; end_time: string | null; location: string | null; notes: string | null }
@@ -57,6 +57,7 @@ interface TripItemInfo {
   confirmation: string | null; airline: string | null; flight_number: string | null; origin: string | null; destination: string | null; details: string | null; cost: number | null
 }
 interface MoneyInInfo { amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null }
+interface AffirmInfo { store: string | null; payment_amount: number | null; payments: number | null; first_payment_on: string | null; total: number | null; purchased_on: string | null }
 interface RideInfo { service: string | null; total: number | null; date: string | null; time: string | null; card_last4: string | null; payment_hint: string | null; dropoff: string | null }
 interface MoneyOutInfo { amount: number | null; to: string | null; sent_on: string | null; via: string | null; note: string | null; account_hint: string | null; status: 'sent' | 'requested' | 'failed' }
 interface ReturnInfo {
@@ -67,11 +68,11 @@ interface ReturnInfo {
 interface Reading {
   kind: Kind; confident: boolean; summary: string; existing_order_id: string | null; existing_return_id: string | null
   order: OrderInfo | null; afterpay: AfterpayInfo | null; appointment: AppointmentInfo | null; trip_item: TripItemInfo | null; money_in: MoneyInInfo | null
-  money_out: MoneyOutInfo | null; ret: ReturnInfo | null; ride: RideInfo | null
+  money_out: MoneyOutInfo | null; ret: ReturnInfo | null; ride: RideInfo | null; affirm: AffirmInfo | null
 }
 interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; ride?: RideInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; ride?: RideInfo | null; affirm?: AffirmInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 interface EmailRow {
   id: string; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null; body: string
@@ -451,8 +452,8 @@ const TOOL = {
     required: ['kind', 'confident', 'summary'],
     properties: {
       kind: {
-        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'other'],
-        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for an installment of an existing Afterpay plan, or an Afterpay account notice. appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. money_out = money Jae SENT to a person with Zelle, Cash App or Venmo ("You sent $50 to ...", "Payment sent"), and also requests and failed or cancelled payments (say which in money_out.status). ride = a Lyft or Uber ride receipt (a ride Jae took and paid for; not promos, not driver earnings). return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
+        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'other'],
+        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for a payment on an existing Afterpay plan or Affirm loan, autopay notices, or an Afterpay/Affirm account notice. affirm = a NEW Affirm loan (purchase financed with Affirm: monthly payments). appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. money_out = money Jae SENT to a person with Zelle, Cash App or Venmo ("You sent $50 to ...", "Payment sent"), and also requests and failed or cancelled payments (say which in money_out.status). ride = a Lyft or Uber ride receipt (a ride Jae took and paid for; not promos, not driver earnings). return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
       },
       confident: { type: 'boolean', description: 'false if you are guessing about what kind it is or about the key dates' },
       summary: { type: 'string', description: 'One short line for Jae, e.g. "Amazon order: Echo Dot, arriving Thu Oct 23"' },
@@ -479,7 +480,7 @@ const TOOL = {
           carrier: nul('string'), tracking_number: nul('string'),
           expected_on: { ...nul('string'), description: 'expected delivery day YYYY-MM-DD. For a range ("Oct 22-24") use the LAST day. For a delay with no new date, null.' },
           delivered_on: nul('string'), delivered_time: { ...nul('string'), description: 'HH:MM 24-hour, if the email says when it was delivered' },
-          paid_with_afterpay: { type: 'boolean' },
+          paid_with_afterpay: { type: 'boolean' }, paid_with_affirm: { type: 'boolean' },
         },
       },
       afterpay: {
@@ -502,6 +503,14 @@ const TOOL = {
           via: { type: ['string', 'null'], enum: ['zelle', 'cashapp', 'venmo', 'deposit', 'refund', 'other', null] },
           is_paycheck: { type: 'boolean', description: 'true for her regular Delta paycheck / payroll direct deposit (already counted by the app)' },
           account_hint: { ...nul('string'), description: 'bank or account it went into, if the email says (e.g. "SoFi", "Navy Federal checking")' },
+        },
+      },
+      affirm: {
+        ...nul('object'),
+        properties: {
+          store: nul('string'), payment_amount: { ...nul('number'), description: 'the monthly payment (interest included)' },
+          payments: { ...nul('number'), description: 'how many monthly payments' }, first_payment_on: { ...nul('string'), description: 'day the first payment is due' },
+          total: { ...nul('number'), description: 'purchase / loan amount' }, purchased_on: nul('string'),
         },
       },
       ride: {
@@ -545,7 +554,8 @@ Rules:
 - Dates are YYYY-MM-DD and times are HH:MM 24-hour, local to where things happen. Work out words like "Thursday" or "tomorrow" from the date the email was sent.
 - Fill only what the email actually says. Use null for anything missing. Never invent order numbers, totals or tracking numbers.
 - Orders: Amazon, American Eagle, Banana Republic and other stores. Status words: confirmed/placed = ordered; shipped/on the way/in transit = shipped; out for delivery = out_for_delivery; delivered = delivered; running late/delayed = delayed; cancelled = cancelled.
-- If the store email says it was paid with Afterpay, set order.paid_with_afterpay true.
+- If the store email says it was paid with Afterpay, set order.paid_with_afterpay true. If it was paid with Affirm, set order.paid_with_affirm true (the Affirm email itself adds the loan).
+- A new Affirm loan email ("Your Affirm loan is confirmed", "You bought ... with Affirm") is kind "affirm". Affirm payment reminders, autopay notices and payment receipts are kind "afterpay_payment".
 - Afterpay normally splits a purchase into 4 payments every 2 weeks. A brand-new Afterpay purchase is kind "afterpay". If the email says the first payment is due later (not taken today), first_payment_on is that later date.
 - Jae works for Delta and often flies non-rev standby or on award certificates; standby listings and itineraries are kind "trip".
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
@@ -595,10 +605,10 @@ async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips
 
 /** Keeps only well-formed values from the AI's answer. */
 function clean(r: Record<string, unknown>): Reading {
-  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'other']
+  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'other']
   const statuses: OrderStatus[] = ['ordered', 'shipped', 'out_for_delivery', 'delivered', 'delayed', 'cancelled']
   const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null)
-  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return), mo = obj(r.money_out), rd = obj(r.ride)
+  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return), mo = obj(r.money_out), rd = obj(r.ride), af = obj(r.affirm)
   const stages: ReturnStage[] = ['started', 'dropped_off', 'refunded']
   const itemKinds = ['flight', 'hotel', 'car', 'drive', 'food', 'event', 'other']
   return {
@@ -611,7 +621,7 @@ function clean(r: Record<string, unknown>): Reading {
       store: isText(o.store), order_number: isText(o.order_number), items: isText(o.items), total: isNum(o.total),
       ordered_on: isDay(o.ordered_on), status: statuses.includes(o.status as OrderStatus) ? o.status as OrderStatus : null,
       carrier: isText(o.carrier), tracking_number: isText(o.tracking_number), expected_on: isDay(o.expected_on),
-      delivered_on: isDay(o.delivered_on), delivered_time: isTime(o.delivered_time), paid_with_afterpay: o.paid_with_afterpay === true,
+      delivered_on: isDay(o.delivered_on), delivered_time: isTime(o.delivered_time), paid_with_afterpay: o.paid_with_afterpay === true, paid_with_affirm: o.paid_with_affirm === true,
     },
     afterpay: a && {
       store: isText(a.store), total: isNum(a.total), purchased_on: isDay(a.purchased_on), first_payment_on: isDay(a.first_payment_on), order_number: isText(a.order_number),
@@ -627,6 +637,10 @@ function clean(r: Record<string, unknown>): Reading {
     },
     money_in: mi && {
       amount: isNum(mi.amount), from: isText(mi.from), received_on: isDay(mi.received_on), via: isText(mi.via), is_paycheck: mi.is_paycheck === true, account_hint: isText(mi.account_hint),
+    },
+    affirm: af && {
+      store: isText(af.store), payment_amount: isNum(af.payment_amount), payments: isNum(af.payments) ? Math.round(isNum(af.payments)!) : null,
+      first_payment_on: isDay(af.first_payment_on), total: isNum(af.total), purchased_on: isDay(af.purchased_on),
     },
     ride: rd && {
       service: isText(rd.service), total: isNum(rd.total), date: isDay(rd.date), time: isTime(rd.time),
@@ -824,6 +838,12 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
       return done({ status: r.confident ? 'review' : 'unsure', kind: 'money_in', summary, suggestion: { money_in: r.money_in } })
     }
 
+    if (r.kind === 'affirm' && r.affirm) {
+      const x = r.affirm
+      x.store = x.store ?? r.order?.store ?? null
+      return done({ status: r.confident && x.payment_amount && x.payments ? 'review' : 'unsure', kind: 'affirm', summary, suggestion: { affirm: x } })
+    }
+
     if (r.kind === 'ride' && r.ride?.total) return done(await logRide(db, owner, r.ride, trips, today, summary))
 
     if (r.kind === 'money_out' && r.money_out) {
@@ -845,7 +865,7 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
     // Couldn't place it (or the key details are missing): Jae takes a look
     return done({
       status: 'unsure', kind: r.kind, summary,
-      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in, ret: r.ret, money_out: r.money_out, ride: r.ride },
+      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in, ret: r.ret, money_out: r.money_out, ride: r.ride, affirm: r.affirm },
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -1137,7 +1157,7 @@ async function unpaidDue(db: SupabaseClient, owner: string, days: string[]): Pro
   const [cards, bills, orders, pays] = await Promise.all([
     db.from('cards').select('id, name, due_day, minimum_payment, tracking_since').eq('user_id', owner).eq('is_active', true),
     db.from('bills').select('id, name, due_day, amount, tracking_since').eq('user_id', owner).eq('is_active', true),
-    db.from('afterpay_orders').select('id, name, total, order_date, installments, interval_days').eq('user_id', owner),
+    db.from('afterpay_orders').select('*').eq('user_id', owner),   // provider / monthly / fixed payment come from 12_affirm.sql
     db.from('payments').select('card_id, bill_id, afterpay_order_id, installment_no, due_date').eq('user_id', owner).gte('due_date', from),
   ])
   const paid = (pays.data ?? []) as { card_id: string | null; bill_id: string | null; afterpay_order_id: string | null; installment_no: number | null; due_date: string }[]
@@ -1149,17 +1169,31 @@ async function unpaidDue(db: SupabaseClient, owner: string, days: string[]): Pro
     for (const b of (bills.data ?? []) as { id: string; name: string; due_day: number; amount: number | null; tracking_since: string }[]) {
       if (k >= b.tracking_since && dueOn(b.due_day, k) && !paid.some((p) => p.bill_id === b.id && p.due_date === k)) out.push({ name: b.name, amount: b.amount === null ? null : Number(b.amount), date: k })
     }
-    for (const o of (orders.data ?? []) as { id: string; name: string; total: number; order_date: string; installments: number; interval_days: number }[]) {
+    type Plan = { id: string; name: string; total: number; order_date: string; installments: number; interval_days: number; provider?: string; interval_months?: number | null; payment_amount?: number | null; refunded?: number | null }
+    for (const o of (orders.data ?? []) as Plan[]) {
       for (let n = 1; n <= o.installments; n++) {
-        if (diffDays(o.order_date, k) !== (n - 1) * o.interval_days) continue
+        const day = o.interval_months ? addMonthsKeep(o.order_date, (n - 1) * o.interval_months) : addDays(o.order_date, (n - 1) * o.interval_days)
+        if (day !== k) continue
         if (paid.some((p) => p.afterpay_order_id === o.id && p.installment_no === n)) continue
         const total = Number(o.total)
         const base = Math.floor((total * 100) / o.installments) / 100
-        out.push({ name: `Afterpay ${o.name}`, amount: n < o.installments ? base : Math.round((total - base * (o.installments - 1)) * 100) / 100, date: k })
+        const plain = (j: number) => (o.payment_amount ? Number(o.payment_amount) : j < o.installments ? base : Math.round((total - base * (o.installments - 1)) * 100) / 100)
+        let later = 0
+        for (let j = n + 1; j <= o.installments; j++) later += plain(j)
+        const amount = Math.round(Math.max(0, plain(n) - Math.max(0, Number(o.refunded ?? 0) - later)) * 100) / 100
+        if (amount <= 0) continue   // refunded
+        out.push({ name: `${o.provider === 'affirm' ? 'Affirm' : 'Afterpay'} ${o.name}`, amount, date: k })
       }
     }
   }
   return out
+}
+/** Same day of the month, k months later (the 31st becomes the last day of a shorter month). */
+function addMonthsKeep(key: string, k: number): string {
+  const [y, m, d] = key.split('-').map(Number)
+  const first = new Date(Date.UTC(y, m - 1 + k, 1))
+  const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate()
+  return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d, last))).toISOString().slice(0, 10)
 }
 const dueText = (items: DueItem[]) => items.map((i) => `${i.name}${i.amount ? ` ${money$(i.amount)}` : ''}`).join(', ')
 

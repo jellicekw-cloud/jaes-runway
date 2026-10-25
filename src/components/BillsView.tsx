@@ -3,7 +3,7 @@ import { PaydownCard, PaydownPlan } from './Paydown'
 import { DebtProgress, MilestoneBanner, StatementNudge } from './Progress'
 import { addDays, money, shortDate } from '../lib/dates'
 import {
-  type TripCost, addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
+  type TripCost, AFFIRM_COLOR, addAffirmLoan, addMonthsKeepDay as addMonthsKeep, addAfterpayOrder, deleteRow, dueBeforePayday, setAfterpayFirstPayment, insertRow, installmentAmount, installmentDate, markPaid, obligationsOn,
   parseMoney, undoPayment, updateRow, type MoneyData,
 } from '../lib/money'
 import { SWATCHES, type AfterpayOrder, type Bill, type Card, type Subscription } from '../lib/types'
@@ -36,10 +36,14 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
   const cardBal = m.cards.reduce((t, c) => t + (c.balance ?? 0), 0)
   const limits = m.cards.filter((c) => c.balance !== null && c.credit_limit).reduce((t, c) => t + (c.credit_limit ?? 0), 0)
   const util = limits ? Math.round((cardBal / limits) * 100) : null
-  const apLeft = m.orders.reduce((t, o) => {
+  const leftOn = (list: AfterpayOrder[]) => list.reduce((t, o) => {
     for (let n = 1; n <= o.installments; n++) if (!m.payments.some((p) => p.afterpay_order_id === o.id && p.installment_no === n)) t += installmentAmount(o, n)
     return t
   }, 0)
+  const afterpay = m.orders.filter((o) => o.provider !== 'affirm')
+  const affirm = m.orders.filter((o) => o.provider === 'affirm')
+  const apLeft = leftOn(afterpay)
+  const affirmLeft = leftOn(affirm)
   const subMonthly = m.subs.reduce((t, s) => t + (s.cycle === 'monthly' ? s.amount : s.cycle === 'yearly' ? s.amount / 12 : (s.amount * 52) / 12), 0)
   const due = dueBeforePayday(m, today, tripCosts)
   const payFrom = [
@@ -65,7 +69,8 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
           <Stat label="Utilization" value={util === null ? '—' : `${util}%`}
             note={util === null ? 'Add balances and limits to see this' : 'Under 30% is best for your credit score'}
             meter={util} meterColor={util === null ? undefined : util < 30 ? 'var(--pay)' : util < 50 ? 'var(--warn)' : 'var(--bad)'} />
-          <Stat label="Afterpay left" value={money(apLeft)} note={`${m.orders.length} order${m.orders.length === 1 ? '' : 's'}`} />
+          <Stat label={affirm.length ? 'Afterpay + Affirm left' : 'Afterpay left'} value={money(apLeft + affirmLeft)}
+            note={affirm.length ? `${money(apLeft)} Afterpay · ${money(affirmLeft)} Affirm` : `${afterpay.length} order${afterpay.length === 1 ? '' : 's'}`} />
           <Stat label="Subscriptions" value={`${money(subMonthly)}/mo`} note={`${money(subMonthly * 12)} a year`} />
         </div>
         {due && (
@@ -88,12 +93,22 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
       </Section>
 
       <Section title="Afterpay" id="afterpay" right={<span className="font-bold tnum">{money(apLeft)} left</span>}>
-        {m.orders.length === 0 && <p className="m-0 text-muted">No Afterpay orders yet. Add one below and its 4 payments land on your calendar.</p>}
+        {afterpay.length === 0 && <p className="m-0 text-muted">No Afterpay orders yet. Add one below and its 4 payments land on your calendar.</p>}
         <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
-          {m.orders.map((o) => <OrderCard key={o.id} order={o} m={m} today={today} run={run} />)}
+          {afterpay.map((o) => <OrderCard key={o.id} order={o} m={m} today={today} run={run} />)}
         </div>
-        <Reveal label="+ Add an Afterpay order" startOpen={m.orders.length === 0}>
+        <Reveal label="+ Add an Afterpay order" startOpen={afterpay.length === 0}>
           <AddOrder payFrom={payFrom} today={today} run={run} m={m} />
+        </Reveal>
+      </Section>
+
+      <Section title="Affirm" id="affirm" right={<span className="font-bold tnum">{money(affirmLeft)} left</span>}>
+        {affirm.length === 0 && <p className="m-0 text-muted">No Affirm loans yet. Add the ones you have below: the monthly payment and how many are left.</p>}
+        <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
+          {affirm.map((o) => <OrderCard key={o.id} order={o} m={m} today={today} run={run} />)}
+        </div>
+        <Reveal label="+ Add an Affirm loan" startOpen={affirm.length === 0}>
+          <AddAffirm payFrom={payFrom} today={today} run={run} />
         </Reveal>
       </Section>
 
@@ -400,19 +415,20 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
   const [editDates, setEditDates] = useState(false)
   const [open, setOpen] = useRemembered(`runway-ap-open-${o.id}`, false)
   const next = tiles.find((t) => t.ob && t.ob.status !== 'paid')
+  const color = o.provider === 'affirm' ? AFFIRM_COLOR : '#0EA5E9'
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={`ap-${o.id}-details`}
         className="flex items-center gap-2.5 w-full bg-transparent border-0 p-0 text-left text-fg cursor-pointer">
-        <span className="size-3.5 rounded-full shrink-0 bg-[#0EA5E9]" />
+        <span className="size-3.5 rounded-full shrink-0" style={{ background: color }} />
         <b className="text-lg flex-1 truncate">{o.name}</b>
         <b className="tnum">{money(o.total)}</b>
         <Chevron open={open} size={20} />
         <span className="sr-only">{open ? 'Hide details' : 'Show details'}</span>
       </button>
       <span className="h-2.5 rounded-full bg-line overflow-hidden">
-        <span className="block h-full rounded-full bg-[#0EA5E9]" style={{ width: `${(paid / o.installments) * 100}%` }} />
+        <span className="block h-full rounded-full" style={{ width: `${(paid / o.installments) * 100}%`, background: color }} />
       </span>
       {!open && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -459,7 +475,7 @@ function OrderCard({ order: o, m, today, run }: { order: AfterpayOrder; m: Money
         ))}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted">
-        <span>{paid} of {o.installments} paid · every {o.interval_days} days · charges {from ?? 'not set'}</span>
+        <span>{paid} of {o.installments} paid · {o.interval_months ? `${money(o.payment_amount)} monthly` : `every ${o.interval_days} days`} · charges {from ?? 'not set'}</span>
         <ConfirmDelete label="Delete order" onConfirm={() => void run(() => deleteRow('afterpay_orders', o.id))} />
       </div>
       </div>)}
@@ -527,6 +543,56 @@ function AddOrder({ payFrom, today, run, m }: { payFrom: { value: string; label:
       </div>
       {preview && <p className="m-0 rounded-xl bg-accent-soft px-3 py-2 text-sm"><b>4 payments:</b> {preview}. {skip ? 'Nothing is paid today.' : 'The first is paid at checkout.'}</p>}
       <button type="submit" className="self-start h-11 px-5 rounded-xl border-0 bg-accent text-accent-ink font-bold cursor-pointer">Add order</button>
+    </form>
+  )
+}
+
+function AddAffirm({ payFrom, today, run }: { payFrom: { value: string; label: string }[]; today: string; run: Run }) {
+  const nfcu = payFrom.find((p) => p.label === 'NFCU')?.value ?? ''
+  const [name, setName] = useState('')
+  const [pay, setPay] = useState('')
+  const [count, setCount] = useState('3')
+  const [next, setNext] = useState(addDays(today, 30))
+  const [src, setSrc] = useState(nfcu)
+  const [err, setErr] = useState('')
+  const p = parseMoney(pay), n = Number(count)
+
+  function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!p || p <= 0) { setErr('Enter the monthly payment.'); return }
+    if (!Number.isInteger(n) || n < 1 || n > 48) { setErr('How many payments are left (1–48)?'); return }
+    setErr('')
+    void run(async () => {
+      await addAffirmLoan({ name: name.trim() || 'Affirm loan', payment: p, payments: n, first_payment: next, ...splitSource(src) })
+      setName(''); setPay(''); setCount('3'); setNext(addDays(today, 30))
+    })
+  }
+  const cls = 'h-10 rounded-lg border border-line bg-surface-2 px-2.5 text-fg focus:outline-2 focus:outline-accent-hi'
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl border border-dashed border-muted p-4" aria-label="Add an Affirm loan">
+      <b className="text-lg">Add an Affirm loan</b>
+      <div className="grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-2.5 items-end">
+        <label htmlFor="af-name" className="col-span-2 sm:col-span-1 flex flex-col gap-1">
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">What's it for</span>
+          <input id="af-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Peloton, Wayfair couch" className={cls} />
+        </label>
+        <label htmlFor="af-pay" className="flex flex-col gap-1">
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">Monthly payment</span>
+          <input id="af-pay" inputMode="decimal" value={pay} onChange={(e) => setPay(e.target.value)} placeholder="$0.00" className={`${cls} tnum`} />
+        </label>
+        <label htmlFor="af-count" className="flex flex-col gap-1">
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">Payments left</span>
+          <input id="af-count" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} className={`${cls} tnum`} />
+        </label>
+        <label htmlFor="af-next" className="flex flex-col gap-1">
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">Next payment</span>
+          <input id="af-next" type="date" value={next} onChange={(e) => setNext(e.target.value || next)} className={cls} />
+        </label>
+        <SourceSelect id="af-src" value={src} options={payFrom} onChange={setSrc} label="Affirm charges" />
+      </div>
+      {p && n > 0 && <p className="m-0 rounded-xl bg-accent-soft px-3 py-2 text-sm"><b>{n} × {money(p)}</b> on the {Number(next.slice(8))}{['th', 'st', 'nd', 'rd'][Number(next.slice(8)) % 10 > 3 || [11, 12, 13].includes(Number(next.slice(8))) ? 0 : Number(next.slice(8)) % 10]} of each month · {money(p * n)} left · last one {shortDate(addMonthsKeep(next, n - 1))}</p>}
+      {err && <p role="alert" className="m-0 text-sm font-bold text-bad">{err}</p>}
+      <button type="submit" className="self-start h-11 px-5 rounded-xl border-0 bg-accent text-accent-ink font-bold cursor-pointer">Add loan</button>
     </form>
   )
 }

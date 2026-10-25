@@ -7,7 +7,7 @@ import {
   ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, VIA_LABEL, addFromEmail, moneyOutDefaults, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
   needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, recentRefunds, refundOptions, refundToFromOrder, refundToLabel, removeOrder, removeReturn,
   rereadEmail, returnLine, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
-  type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
+  type AffirmInfo, type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type ReturnInfo, type ReturnRec, type ReturnStage, type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
 
@@ -32,8 +32,8 @@ function F({ label, wide, children }: { label: string; wide?: boolean; children:
   )
 }
 
-const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', money_out: '💸', return: '↩️', gmail_confirm: '✉', other: '✉' }
-const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', money_out: 'Money out', return: 'Return' }
+const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', affirm: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', money_out: '💸', return: '↩️', gmail_confirm: '✉', other: '✉' }
+const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', affirm: 'Affirm', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', money_out: 'Money out', return: 'Return' }
 
 const blankOrder = (store: string | null = null): OrderInfo => ({
   store, order_number: null, items: null, total: null, ordered_on: null, status: 'ordered', carrier: null, tracking_number: null,
@@ -179,6 +179,7 @@ function initialKind(e: InboxEmail): CardKind | null {
   if (e.kind === 'money_in') return e.suggestion.money_in ? 'money_in' : null
   if (e.kind === 'return') return e.suggestion.ret ? 'return' : null
   if (e.kind === 'money_out') return e.suggestion.money_out ? 'money_out' : null
+  if (e.kind === 'affirm') return e.suggestion.affirm ? 'affirm' : null
   return null
 }
 
@@ -188,6 +189,10 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
     const base = { amount: null, from: who, received_on: null, via: null, is_paycheck: false, account_hint: null }
     return { ...s, money_in: moneyInDefaults({ ...base, ...(s.money_in ?? {}) }, m) }
   }
+  if (kind === 'affirm') {
+    const base: AffirmInfo = { store: s.order?.store ?? who, payment_amount: null, payments: null, first_payment_on: null, total: s.order?.total ?? null, purchased_on: null }
+    return { ...s, affirm: { ...base, ...(s.affirm ?? {}) } }
+  }
   if (kind === 'money_out') {
     const base: MoneyOutInfo = { amount: s.money_in?.amount ?? null, to: null, sent_on: s.money_in?.received_on ?? null, via: null, note: null, account_hint: null }
     return { ...s, money_out: moneyOutDefaults({ ...base, ...(s.money_out ?? {}) }, m) }
@@ -196,7 +201,7 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
     const order = { ...blankOrder(who), ...(s.order ?? {}) }
     const afterpay = order.paid_with_afterpay || s.afterpay ? { ...blankAfterpay(order.store), ...(s.afterpay ?? {}) } : s.afterpay ?? null
     if (s.afterpay) order.paid_with_afterpay = true
-    if (order.pay_with === undefined) order.pay_with = defaultPayWith(m)
+    if (order.pay_with === undefined) order.pay_with = order.paid_with_affirm ? 'none:affirm' : defaultPayWith(m)
     return { ...s, order, afterpay }
   }
   if (kind === 'afterpay') return { ...s, afterpay: { ...blankAfterpay(s.order?.store ?? who), total: s.order?.total ?? null, ...(s.afterpay ?? {}) } }
@@ -209,6 +214,13 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
 }
 
 function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData, m: MoneyData): string[] {
+  if (kind === 'affirm' && s.affirm) {
+    const x = s.affirm
+    return [
+      `${x.payments ?? '?'} × ${x.payment_amount ? money(x.payment_amount) : '?'} monthly${x.total ? ` · ${money(x.total)}` : ''}`,
+      `1st payment ${x.first_payment_on ? shortDate(x.first_payment_on) : '?'} · from NFCU · goes in Bills → Affirm`,
+    ]
+  }
   if (kind === 'money_out' && s.money_out) {
     const x = s.money_out
     const acct = m.accounts.find((a) => a.id === x.account_id)
@@ -245,7 +257,7 @@ function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData,
       lines.push(apLine(a?.total ?? o.total, a?.purchased_on ?? o.ordered_on ?? today, a?.first_payment_on ?? a?.purchased_on ?? o.ordered_on))
     } else {
       const from = payWithLabel(m, o.pay_with)
-      lines.push(from && o.total ? `Logs ${money(o.total)} spent from ${from}` : from ? 'No total yet, so it won\'t be logged as spending (Edit to add one)' : 'Not logged as spending')
+      lines.push(o.pay_with === 'none:affirm' ? 'Paid with Affirm · the loan comes in from Affirm\'s own email' : from && o.total ? `Logs ${money(o.total)} spent from ${from}` : from ? 'No total yet, so it won\'t be logged as spending (Edit to add one)' : 'Not logged as spending')
     }
     return lines.filter(Boolean)
   }
@@ -330,6 +342,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
         : kind === 'appointment' ? `Appointment · ${draft.appointment?.title ?? sender(e)}`
           : kind === 'trip' ? `Trip · ${draft.trip_item?.title ?? sender(e)}`
           : kind === 'money_in' ? `Money in · ${draft.money_in?.amount ? money(draft.money_in.amount) : sender(e)}`
+          : kind === 'affirm' ? `Affirm · ${draft.affirm?.store ?? sender(e)}`
           : kind === 'money_out' ? `Money out · ${draft.money_out?.amount ? money(draft.money_out.amount) : sender(e)}`
           : kind === 'return' ? `${draft.ret?.stage === 'refunded' ? 'Refund' : 'Return'} · ${draft.ret?.store ?? sender(e)}`
             : e.subject || sender(e)
@@ -388,7 +401,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-bold tracking-wider uppercase text-muted">{kind ? 'Adding it as' : 'What is it?'}</span>
               <div className="flex flex-wrap gap-1.5">
-                {(['order', 'afterpay', 'appointment', 'trip', 'money_in', 'money_out', 'return'] as CardKind[]).map((k) => (
+                {(['order', 'afterpay', 'affirm', 'appointment', 'trip', 'money_in', 'money_out', 'return'] as CardKind[]).map((k) => (
                   <button key={k} type="button" aria-pressed={kind === k} onClick={() => choose(k)}
                     className={`h-9 px-3 rounded-full text-sm font-bold cursor-pointer border ${kind === k ? 'bg-accent text-accent-ink border-accent' : 'bg-surface-2 text-fg border-line'}`}>
                     {KIND_NAME[k]}
@@ -423,6 +436,19 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
 function EditForm({ kind, draft, setDraft, trips, today, m }: {
   kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string; m: MoneyData
 }) {
+  if (kind === 'affirm') {
+    const x = draft.affirm!
+    const set = (p: Partial<AffirmInfo>) => setDraft((d) => ({ ...d, affirm: { ...d.affirm!, ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="What it's for" wide><input className={inputCls} value={x.store ?? ''} onChange={(ev) => set({ store: orNull(ev.target.value) })} /></F>
+        <F label="Monthly payment"><input className={inputCls} inputMode="decimal" defaultValue={x.payment_amount ?? ''} onChange={(ev) => set({ payment_amount: toNum(ev.target.value) })} /></F>
+        <F label="How many payments"><input className={inputCls} inputMode="numeric" defaultValue={x.payments ?? ''} onChange={(ev) => { const n = Number(ev.target.value); set({ payments: Number.isInteger(n) && n > 0 ? n : null }) }} /></F>
+        <F label="1st payment"><input type="date" className={inputCls} value={x.first_payment_on ?? ''} onChange={(ev) => set({ first_payment_on: orNull(ev.target.value) })} /></F>
+        <F label="Bought on"><input type="date" className={inputCls} value={x.purchased_on ?? today} onChange={(ev) => set({ purchased_on: orNull(ev.target.value) })} /></F>
+      </div>
+    )
+  }
   if (kind === 'money_out') {
     const x = draft.money_out!
     const set = (p: Partial<MoneyOutInfo>) => setDraft((d) => ({ ...d, money_out: { ...d.money_out!, ...p } }))
@@ -496,6 +522,7 @@ function EditForm({ kind, draft, setDraft, trips, today, m }: {
             <select className={inputCls} value={o.pay_with ?? 'none'} onChange={(ev) => set({ pay_with: ev.target.value })}>
               {m.accounts.filter((x) => x.kind === 'checking').map((x) => <option key={x.id} value={`a:${x.id}`}>{x.institution ?? x.name}</option>)}
               {m.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
+              <option value="none:affirm">Affirm (the loan comes from Affirm's email)</option>
               <option value="none">Don't log it (already logged)</option>
             </select>
           </F>

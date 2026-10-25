@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { DAYS, addDays, dateOf, daysBetween, shortDate } from './dates'
-import { addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, installmentAmount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
+import { addAffirmLoan, addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, installmentAmount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
 import { timeLabel } from './plans'
 import { createTrip, saveItem, type ItemKind, type PassType } from './trips'
 import { SENT_CATEGORY } from './types'
@@ -38,9 +38,10 @@ export interface ReturnInfo {
 export interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
   status: OrderStatus | null; carrier: string | null; tracking_number: string | null; expected_on: string | null
-  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean
+  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean
   pay_with?: string | null   // set when you review it: 'a:<account id>', 'c:<card id>' or 'none' (don't log as spending)
 }
+export interface AffirmInfo { store: string | null; payment_amount: number | null; payments: number | null; first_payment_on: string | null; total: number | null; purchased_on: string | null }
 export interface AfterpayInfo { store: string | null; total: number | null; purchased_on: string | null; first_payment_on: string | null; order_number: string | null }
 export interface AppointmentInfo { title: string | null; date: string | null; start_time: string | null; end_time: string | null; location: string | null; notes: string | null }
 export interface TripItemInfo {
@@ -60,11 +61,11 @@ export interface MoneyOutInfo {
 export const VIA_LABEL: Record<string, string> = { zelle: 'Zelle', cashapp: 'Cash App', venmo: 'Venmo' }
 export interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; affirm?: AffirmInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 
 export type EmailStatus = 'reading' | 'review' | 'unsure' | 'auto' | 'added' | 'skipped' | 'merged' | 'error'
-export type CardKind = 'order' | 'afterpay' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return'
+export type CardKind = 'order' | 'afterpay' | 'affirm' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return'
 
 export interface InboxEmail {
   id: string; source: 'forward' | 'paste'; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null
@@ -213,6 +214,13 @@ export function needsFixing(kind: CardKind, s: Suggestion, trips: { id: string }
     if (!s.money_in?.amount || s.money_in.amount <= 0) return 'Add the amount.'
     if (!s.money_in.account_id) return 'Pick which account it went into.'
   }
+  if (kind === 'affirm') {
+    const x = s.affirm
+    if (!x?.store?.trim()) return 'Add what it\'s for.'
+    if (!x.payment_amount || x.payment_amount <= 0) return 'Add the monthly payment.'
+    if (!x.payments || x.payments < 1) return 'Add how many payments.'
+    if (!x.first_payment_on) return 'Add the first payment date.'
+  }
   if (kind === 'money_out') {
     if (!s.money_out?.amount || s.money_out.amount <= 0) return 'Add the amount.'
     if (!s.money_out.account_id) return 'Pick which account it came out of.'
@@ -298,6 +306,16 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
     if (error) throw error
     await finish(e, s, kind)
     return `${a.title} added to ${shortDate(a.date!)}`
+  }
+
+  if (kind === 'affirm') {
+    const x = s.affirm!
+    await addAffirmLoan({
+      name: x.store!.trim(), payment: x.payment_amount!, payments: x.payments!, first_payment: x.first_payment_on!, total: x.total,
+      purchased_on: x.purchased_on ?? today, account_id: billsAccountId(m), card_id: null, logSpending: true,
+    })
+    await finish(e, s, kind)
+    return `Affirm · ${x.payments} × $${x.payment_amount!.toFixed(2)} added to Bills`
   }
 
   if (kind === 'money_out') {
