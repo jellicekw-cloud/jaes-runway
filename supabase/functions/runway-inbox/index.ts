@@ -579,7 +579,7 @@ Rules:
 - Afterpay normally splits a purchase into 4 payments every 2 weeks. A brand-new Afterpay purchase is kind "afterpay". If the email says the first payment is due later (not taken today), first_payment_on is that later date.
 - Jae works for Delta and often flies non-rev standby or on award certificates; standby listings and itineraries are kind "trip".
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
-- Some items are text messages Jae shared from her phone (no email headers). Read them the same way. A bank or card balance alert ("NFCU: Avail bal $1,234.56 in Checking x1234") is kind "balance".
+- Some items are text messages Jae shared from her phone (no email headers). Read them the same way. A bank or card balance alert ("NFCU: Avail bal $1,234.56 in Checking x1234", "Delta Community: UPDATE for SAVG0000 Current balance: $157.42 Available balance: $152.42") is kind "balance": fill balance.institution, balance.balance (current) and balance.available. "Delta Community" is Delta Community Credit Union (DECU).
 - Money Jae SENT ("You sent", "Payment sent", "You paid") with Zelle or Cash App is kind "money_out", never "money_in". Read who the money went to and the direction carefully.
 - Money Jae received (Zelle from Navy Federal, side-work deposits into SoFi, Cash App) is kind "money_in". Her regular Delta payroll deposit is money_in with is_paycheck true.
 - Returns and refunds for a purchase (e.g. Amazon "Return request confirmed", "Dropoff confirmed", "Advance refund issued", "Refund processed") are kind "return", never "shipping" or "money_in". Fill the return object. If it matches one of "Returns in Runway", set existing_return_id.
@@ -865,8 +865,17 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
       return done({ status: r.confident ? 'review' : 'unsure', kind: 'money_in', summary, suggestion: { money_in: r.money_in } })
     }
 
-    if (r.kind === 'balance' && r.balance && (r.balance.available ?? r.balance.balance) !== null) {
-      return done(await applyBalance(db, owner, r.balance, r.confident, summary))
+    // Balance alerts: fill anything the AI missed straight from the text (amounts, which bank)
+    const parsed = parseBalanceText(`${row.from_name ?? ''}\n${row.subject ?? ''}\n${row.body}`)
+    if (r.kind === 'balance' || (r.kind === 'other' && parsed.institution !== null && (parsed.available ?? parsed.balance) !== null)) {
+      const base: BalanceInfo = { what: 'account', institution: null, account_hint: null, last4: null, balance: null, available: null, as_of_date: null, as_of_time: null }
+      const b: BalanceInfo = { ...base, ...(r.balance ?? {}) }
+      b.available = b.available ?? parsed.available
+      b.balance = b.balance ?? parsed.balance
+      b.institution = b.institution ?? parsed.institution
+      b.account_hint = b.account_hint ?? parsed.hint
+      r.balance = b
+      if ((b.available ?? b.balance) !== null) { r.kind = 'balance'; return done(await applyBalance(db, owner, b, r.confident || parsed.institution !== null, summary)) }
     }
 
     if (r.kind === 'affirm' && r.affirm) {
@@ -916,6 +925,18 @@ export function localToIso(date: string, time: string, tz: string): string {
 }
 
 /** Which account or card a balance alert is about: 'a:<id>' / 'c:<id>', or null if it can't tell. */
+/** Reads a bank balance text without the AI: "Available balance: $152.42", "Avail bal $1,234.56", which bank, savings or checking. */
+export function parseBalanceText(text: string): { available: number | null; balance: number | null; institution: string | null; hint: string | null } {
+  const amt = (re: RegExp) => { const m = text.match(re); return m ? Math.round(Number(m[1].replace(/,/g, '')) * 100) / 100 : null }
+  const available = amt(/avail(?:able)?\.?\s*bal(?:ance)?\.?\s*(?:is|of|:)?\s*\$\s?([\d,]+(?:\.\d{2})?)/i)
+  const balance = amt(/(?:current|ledger|account|statement)\s+bal(?:ance)?\.?\s*(?:is|of|:)?\s*\$\s?([\d,]+(?:\.\d{2})?)/i)
+    ?? (available === null ? amt(/\bbal(?:ance)?\.?\s*(?:is|of|:)?\s*\$\s?([\d,]+(?:\.\d{2})?)/i) : null)
+  const t = text.toLowerCase()
+  const institution = /delta community|\bdecu\b/.test(t) ? 'DECU' : /navy federal|\bnfcu\b/.test(t) ? 'NFCU' : /\bsofi\b/.test(t) ? 'SoFi' : null
+  const hint = /\bsav(?:ings?|g)\b|savg\d*|\bvault\b/.test(t) ? 'Savings' : /\bchecking\b|\bchk\b/.test(t) ? 'Checking' : null
+  return { available, balance, institution, hint }
+}
+
 export function balanceTarget(x: BalanceInfo, accounts: { id: string; name: string; institution: string | null; kind: string }[], cards: { id: string; name: string; last4: string | null }[]): string | null {
   const text = `${x.institution ?? ''} ${x.account_hint ?? ''}`.toLowerCase()
   if (x.what === 'card') {
@@ -925,9 +946,11 @@ export function balanceTarget(x: BalanceInfo, accounts: { id: string; name: stri
     return byName.length === 1 ? `c:${byName[0].id}` : null
   }
   const inst = (a: { institution: string | null; name: string }) => (a.institution ?? a.name).toLowerCase()
-  const atBank = accounts.filter((a) => (text.includes('navy') && inst(a) === 'nfcu') || inst(a).split(/\s+/).some((w) => w.length > 2 && text.includes(w)))
+  const alias = (a: { institution: string | null; name: string }) =>
+    (text.includes('navy') && inst(a) === 'nfcu') || (text.includes('delta community') && inst(a) === 'decu')
+  const atBank = accounts.filter((a) => alias(a) || inst(a).split(/\s+/).some((w) => w.length > 2 && text.includes(w)))
   if (!atBank.length) return null
-  const wantSavings = /saving|vault/.test(text)
+  const wantSavings = /saving|savg|vault/.test(text)
   const pick = atBank.filter((a) => (wantSavings ? a.kind !== 'checking' : a.kind === 'checking'))
   const list = pick.length ? pick : atBank
   return list.length === 1 ? `a:${list[0].id}` : null
