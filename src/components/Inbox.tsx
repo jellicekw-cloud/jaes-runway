@@ -4,10 +4,10 @@ import { INCOME_KIND_LABEL, installmentAmount, type IncomeKind, type MoneyData }
 import { timeLabel } from '../lib/plans'
 import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
 import {
-  ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, VIA_LABEL, addFromEmail, moneyOutDefaults, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
+  ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, VIA_LABEL, addFromEmail, balanceAmount, moneyOutDefaults, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
   needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, recentRefunds, refundOptions, refundToFromOrder, refundToLabel, removeOrder, removeReturn,
   rereadEmail, returnLine, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
-  type AffirmInfo, type AfterpayInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
+  type AffirmInfo, type AfterpayInfo, type BalanceInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type ReturnInfo, type ReturnRec, type ReturnStage, type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
 
@@ -32,8 +32,8 @@ function F({ label, wide, children }: { label: string; wide?: boolean; children:
   )
 }
 
-const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', affirm: '💳', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', money_out: '💸', return: '↩️', gmail_confirm: '✉', other: '✉' }
-const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', affirm: 'Affirm', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', money_out: 'Money out', return: 'Return' }
+const KIND_ICON: Record<string, string> = { order: '📦', shipping: '📦', afterpay: '💳', affirm: '💳', balance: '🏦', afterpay_payment: '💳', appointment: '🩺', trip: '✈', money_in: '💵', money_out: '💸', return: '↩️', gmail_confirm: '✉', other: '✉' }
+const KIND_NAME: Record<CardKind, string> = { order: 'Order', afterpay: 'Afterpay', affirm: 'Affirm', balance: 'Balance', appointment: 'Appointment', trip: 'Trip item', money_in: 'Money in', money_out: 'Money out', return: 'Return' }
 
 const blankOrder = (store: string | null = null): OrderInfo => ({
   store, order_number: null, items: null, total: null, ordered_on: null, status: 'ordered', carrier: null, tracking_number: null,
@@ -180,6 +180,7 @@ function initialKind(e: InboxEmail): CardKind | null {
   if (e.kind === 'return') return e.suggestion.ret ? 'return' : null
   if (e.kind === 'money_out') return e.suggestion.money_out ? 'money_out' : null
   if (e.kind === 'affirm') return e.suggestion.affirm ? 'affirm' : null
+  if (e.kind === 'balance') return e.suggestion.balance ? 'balance' : null
   return null
 }
 
@@ -188,6 +189,10 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
   if (kind === 'money_in') {
     const base = { amount: null, from: who, received_on: null, via: null, is_paycheck: false, account_hint: null }
     return { ...s, money_in: moneyInDefaults({ ...base, ...(s.money_in ?? {}) }, m) }
+  }
+  if (kind === 'balance') {
+    const base: BalanceInfo = { what: 'account', institution: null, account_hint: null, last4: null, balance: null, available: null, as_of_date: null, as_of_time: null, target: null }
+    return { ...s, balance: { ...base, ...(s.balance ?? {}) } }
   }
   if (kind === 'affirm') {
     const base: AffirmInfo = { store: s.order?.store ?? who, payment_amount: null, payments: null, first_payment_on: null, total: s.order?.total ?? null, purchased_on: null }
@@ -218,6 +223,16 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
 }
 
 function describe(kind: CardKind, s: Suggestion, today: string, data: InboxData, trips: TripsData, m: MoneyData): string[] {
+  if (kind === 'balance' && s.balance) {
+    const x = s.balance
+    const amt = balanceAmount(x)
+    const id = x.target?.slice(2)
+    const name = x.target?.startsWith('c:') ? m.cards.find((c) => c.id === id)?.name : m.accounts.find((a) => a.id === id)?.name
+    return [
+      `${amt !== null ? money(amt) : '?'}${x.institution ? ` · ${x.institution}` : ''}${x.account_hint ? ` ${x.account_hint}` : ''}`,
+      name ? `Sets the ${name} balance` : 'Which account or card is it? Tap Edit to pick',
+    ]
+  }
   if (kind === 'affirm' && s.affirm) {
     const x = s.affirm
     return [
@@ -295,9 +310,11 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
   e: InboxEmail; today: string; data: InboxData; money: MoneyData; trips: TripsData; onAdded: (line: string, kind: CardKind) => Promise<void>; reload: Reload
 }) {
   const unsure = e.status !== 'review'
-  const [kind, setKind] = useState<CardKind | null>(unsure ? null : initialKind(e))
+  // A balance it couldn't place is still a balance: show it ready to pick the account
+  const knownBalance = e.kind === 'balance' && Boolean(e.suggestion.balance)
+  const [kind, setKind] = useState<CardKind | null>(unsure && !knownBalance ? null : initialKind(e))
   const [draft, setDraft] = useState<Suggestion>(() => (kind ? withDefaults(kind, e.suggestion, e, m) : e.suggestion))
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(unsure && knownBalance)
   const [showBody, setShowBody] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -348,6 +365,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
           : kind === 'trip' ? `Trip · ${draft.trip_item?.title ?? sender(e)}`
           : kind === 'money_in' ? `Money in · ${draft.money_in?.amount ? money(draft.money_in.amount) : sender(e)}`
           : kind === 'affirm' ? `Affirm · ${draft.affirm?.store ?? sender(e)}`
+          : kind === 'balance' ? `Balance · ${draft.balance?.institution ?? sender(e)}`
           : kind === 'money_out' ? `Money out · ${draft.money_out?.amount ? money(draft.money_out.amount) : sender(e)}`
           : kind === 'return' ? `${draft.ret?.stage === 'refunded' ? 'Refund' : 'Return'} · ${draft.ret?.store ?? sender(e)}`
             : e.subject || sender(e)
@@ -406,7 +424,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-bold tracking-wider uppercase text-muted">{kind ? 'Adding it as' : 'What is it?'}</span>
               <div className="flex flex-wrap gap-1.5">
-                {(['order', 'afterpay', 'affirm', 'appointment', 'trip', 'money_in', 'money_out', 'return'] as CardKind[]).map((k) => (
+                {(['order', 'afterpay', 'affirm', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'balance'] as CardKind[]).map((k) => (
                   <button key={k} type="button" aria-pressed={kind === k} onClick={() => choose(k)}
                     className={`h-9 px-3 rounded-full text-sm font-bold cursor-pointer border ${kind === k ? 'bg-accent text-accent-ink border-accent' : 'bg-surface-2 text-fg border-line'}`}>
                     {KIND_NAME[k]}
@@ -441,6 +459,22 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
 function EditForm({ kind, draft, setDraft, trips, today, m }: {
   kind: CardKind; draft: Suggestion; setDraft: (f: (d: Suggestion) => Suggestion) => void; trips: TripsData; today: string; m: MoneyData
 }) {
+  if (kind === 'balance') {
+    const x = draft.balance!
+    const set = (p: Partial<BalanceInfo>) => setDraft((d) => ({ ...d, balance: { ...d.balance!, ...p } }))
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <F label="Balance"><input className={inputCls} inputMode="decimal" defaultValue={balanceAmount(x) ?? ''} onChange={(ev) => { const n = toNum(ev.target.value); set({ available: n, balance: n }) }} /></F>
+        <F label="Account or card">
+          <select className={inputCls} value={x.target ?? ''} onChange={(ev) => { const v = ev.target.value; set({ target: v || null, what: v.startsWith('c:') ? 'card' : 'account' }) }}>
+            <option value="">Pick one…</option>
+            {m.accounts.map((a) => <option key={a.id} value={`a:${a.id}`}>{a.name}</option>)}
+            {m.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
+          </select>
+        </F>
+      </div>
+    )
+  }
   if (kind === 'affirm') {
     const x = draft.affirm!
     const set = (p: Partial<AffirmInfo>) => setDraft((d) => ({ ...d, affirm: { ...d.affirm!, ...p } }))

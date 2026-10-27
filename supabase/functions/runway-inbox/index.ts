@@ -42,7 +42,7 @@ const reply = (body: unknown, status = 200) =>
 // ---------------------------------------------------------------------------
 
 type OrderStatus = 'ordered' | 'shipped' | 'out_for_delivery' | 'delivered' | 'delayed' | 'cancelled'
-type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return' | 'ride' | 'affirm' | 'other'
+type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return' | 'ride' | 'affirm' | 'balance' | 'other'
 type ReturnStage = 'started' | 'dropped_off' | 'refunded'
 
 interface OrderInfo {
@@ -57,6 +57,11 @@ interface TripItemInfo {
   confirmation: string | null; airline: string | null; flight_number: string | null; origin: string | null; destination: string | null; details: string | null; cost: number | null
 }
 interface MoneyInInfo { amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null }
+interface BalanceInfo {
+  what: 'account' | 'card'; institution: string | null; account_hint: string | null; last4: string | null
+  balance: number | null; available: number | null; as_of_date: string | null; as_of_time: string | null
+  target?: string | null   // filled in by Runway: 'a:<account>' or 'c:<card>'
+}
 interface AffirmInfo { store: string | null; payment_amount: number | null; payments: number | null; first_payment_on: string | null; total: number | null; purchased_on: string | null }
 interface RideInfo { service: string | null; total: number | null; date: string | null; time: string | null; card_last4: string | null; payment_hint: string | null; dropoff: string | null }
 interface MoneyOutInfo { amount: number | null; to: string | null; sent_on: string | null; via: string | null; note: string | null; account_hint: string | null; status: 'sent' | 'requested' | 'failed' }
@@ -68,11 +73,11 @@ interface ReturnInfo {
 interface Reading {
   kind: Kind; confident: boolean; summary: string; existing_order_id: string | null; existing_return_id: string | null
   order: OrderInfo | null; afterpay: AfterpayInfo | null; appointment: AppointmentInfo | null; trip_item: TripItemInfo | null; money_in: MoneyInInfo | null
-  money_out: MoneyOutInfo | null; ret: ReturnInfo | null; ride: RideInfo | null; affirm: AffirmInfo | null
+  money_out: MoneyOutInfo | null; ret: ReturnInfo | null; ride: RideInfo | null; affirm: AffirmInfo | null; balance: BalanceInfo | null
 }
 interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; ride?: RideInfo | null; affirm?: AffirmInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; ride?: RideInfo | null; affirm?: AffirmInfo | null; balance?: BalanceInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 interface EmailRow {
   id: string; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null; body: string
@@ -138,10 +143,11 @@ Deno.serve(async (req) => {
 
   if (payload.action === 'paste') {
     const text = String(payload.text ?? '').trim()
-    if (text.length < 20) return reply({ error: 'Paste the whole email, including the details.' }, 400)
+    const shared = payload.shared === true   // shared from the phone (a text message), not a pasted email
+    if (text.length < (shared ? 8 : 20)) return reply({ error: shared ? 'Nothing to read in that.' : 'Paste the whole email, including the details.' }, 400)
     const head = pastedHeaders(text)
     const ins = await db.from('inbox_emails').insert({
-      user_id: owner, source: 'paste', from_name: head.fromName, from_address: head.fromAddress, subject: head.subject,
+      user_id: owner, source: 'paste', from_name: head.fromName ?? (shared ? 'Shared from your phone' : null), from_address: head.fromAddress, subject: head.subject,
       body: tidy(text).slice(0, MAX_BODY), status: 'reading',
     }).select('id, from_name, from_address, subject, sent_at, body').single()
     if (ins.error) return reply({ error: ins.error.message }, 500)
@@ -452,8 +458,8 @@ const TOOL = {
     required: ['kind', 'confident', 'summary'],
     properties: {
       kind: {
-        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'other'],
-        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for a payment on an existing Afterpay plan or Affirm loan, autopay notices, or an Afterpay/Affirm account notice. affirm = a NEW Affirm loan (purchase financed with Affirm: monthly payments). appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. money_out = money Jae SENT to a person with Zelle, Cash App or Venmo ("You sent $50 to ...", "Payment sent"), and also requests and failed or cancelled payments (say which in money_out.status). ride = a Lyft or Uber ride receipt (a ride Jae took and paid for; not promos, not driver earnings). return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
+        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'balance', 'other'],
+        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for a payment on an existing Afterpay plan or Affirm loan, autopay notices, or an Afterpay/Affirm account notice. affirm = a NEW Affirm loan (purchase financed with Affirm: monthly payments). balance = a balance alert from her bank or credit card ("Your available balance is $X", "Balance alert", "current balance"). appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. money_out = money Jae SENT to a person with Zelle, Cash App or Venmo ("You sent $50 to ...", "Payment sent"), and also requests and failed or cancelled payments (say which in money_out.status). ride = a Lyft or Uber ride receipt (a ride Jae took and paid for; not promos, not driver earnings). return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
       },
       confident: { type: 'boolean', description: 'false if you are guessing about what kind it is or about the key dates' },
       summary: { type: 'string', description: 'One short line for Jae, e.g. "Amazon order: Echo Dot, arriving Thu Oct 23"' },
@@ -504,6 +510,19 @@ const TOOL = {
           via: { type: ['string', 'null'], enum: ['zelle', 'cashapp', 'venmo', 'deposit', 'refund', 'other', null] },
           is_paycheck: { type: 'boolean', description: 'true for her regular Delta paycheck / payroll direct deposit (already counted by the app)' },
           account_hint: { ...nul('string'), description: 'bank or account it went into, if the email says (e.g. "SoFi", "Navy Federal checking")' },
+        },
+      },
+      balance: {
+        ...nul('object'),
+        properties: {
+          what: { type: 'string', enum: ['account', 'card'], description: 'account = bank checking/savings; card = credit card' },
+          institution: { ...nul('string'), description: 'bank or card, e.g. "Navy Federal", "SoFi", "DECU", "Kohl\'s"' },
+          account_hint: { ...nul('string'), description: 'which account as written, e.g. "Checking x1234", "Savings", "Vault"' },
+          last4: { ...nul('string'), description: 'last 4 digits of the account or card, if shown' },
+          balance: { ...nul('number'), description: 'current / ledger balance (for a card: the amount owed)' },
+          available: { ...nul('number'), description: 'available balance, if the alert gives one (bank accounts)' },
+          as_of_date: { ...nul('string'), description: 'date the balance is as of (YYYY-MM-DD), if given' },
+          as_of_time: { ...nul('string'), description: 'time the balance is as of (HH:MM 24-hour), if given' },
         },
       },
       affirm: {
@@ -560,6 +579,7 @@ Rules:
 - Afterpay normally splits a purchase into 4 payments every 2 weeks. A brand-new Afterpay purchase is kind "afterpay". If the email says the first payment is due later (not taken today), first_payment_on is that later date.
 - Jae works for Delta and often flies non-rev standby or on award certificates; standby listings and itineraries are kind "trip".
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
+- Some items are text messages Jae shared from her phone (no email headers). Read them the same way. A bank or card balance alert ("NFCU: Avail bal $1,234.56 in Checking x1234") is kind "balance".
 - Money Jae SENT ("You sent", "Payment sent", "You paid") with Zelle or Cash App is kind "money_out", never "money_in". Read who the money went to and the direction carefully.
 - Money Jae received (Zelle from Navy Federal, side-work deposits into SoFi, Cash App) is kind "money_in". Her regular Delta payroll deposit is money_in with is_paycheck true.
 - Returns and refunds for a purchase (e.g. Amazon "Return request confirmed", "Dropoff confirmed", "Advance refund issued", "Refund processed") are kind "return", never "shipping" or "money_in". Fill the return object. If it matches one of "Returns in Runway", set existing_return_id.
@@ -606,10 +626,10 @@ async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips
 
 /** Keeps only well-formed values from the AI's answer. */
 function clean(r: Record<string, unknown>): Reading {
-  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'other']
+  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'balance', 'other']
   const statuses: OrderStatus[] = ['ordered', 'shipped', 'out_for_delivery', 'delivered', 'delayed', 'cancelled']
   const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null)
-  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return), mo = obj(r.money_out), rd = obj(r.ride), af = obj(r.affirm)
+  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return), mo = obj(r.money_out), rd = obj(r.ride), af = obj(r.affirm), bl = obj(r.balance)
   const stages: ReturnStage[] = ['started', 'dropped_off', 'refunded']
   const itemKinds = ['flight', 'hotel', 'car', 'drive', 'food', 'event', 'other']
   return {
@@ -639,6 +659,11 @@ function clean(r: Record<string, unknown>): Reading {
     },
     money_in: mi && {
       amount: isNum(mi.amount), from: isText(mi.from), received_on: isDay(mi.received_on), via: isText(mi.via), is_paycheck: mi.is_paycheck === true, account_hint: isText(mi.account_hint),
+    },
+    balance: bl && {
+      what: bl.what === 'card' ? 'card' : 'account', institution: isText(bl.institution), account_hint: isText(bl.account_hint),
+      last4: typeof bl.last4 === 'string' && /^\d{4}$/.test(bl.last4.trim()) ? bl.last4.trim() : null,
+      balance: isNum(bl.balance), available: isNum(bl.available), as_of_date: isDay(bl.as_of_date), as_of_time: isTime(bl.as_of_time),
     },
     affirm: af && {
       store: isText(af.store), payment_amount: isNum(af.payment_amount), payments: isNum(af.payments) ? Math.round(isNum(af.payments)!) : null,
@@ -840,6 +865,10 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
       return done({ status: r.confident ? 'review' : 'unsure', kind: 'money_in', summary, suggestion: { money_in: r.money_in } })
     }
 
+    if (r.kind === 'balance' && r.balance && (r.balance.available ?? r.balance.balance) !== null) {
+      return done(await applyBalance(db, owner, r.balance, r.confident, summary))
+    }
+
     if (r.kind === 'affirm' && r.affirm) {
       const x = r.affirm
       x.store = x.store ?? r.order?.store ?? null
@@ -867,13 +896,74 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
     // Couldn't place it (or the key details are missing): Jae takes a look
     return done({
       status: 'unsure', kind: r.kind, summary,
-      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in, ret: r.ret, money_out: r.money_out, ride: r.ride, affirm: r.affirm },
+      suggestion: { order: r.order, afterpay: r.afterpay, appointment: r.appointment, trip_item: r.trip_item, money_in: r.money_in, ret: r.ret, money_out: r.money_out, ride: r.ride, affirm: r.affirm, balance: r.balance },
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     await db.from('inbox_emails').update({ status: 'error', error: msg.slice(0, 500), summary: row.subject }).eq('id', row.id)
     return { id: row.id, status: 'error', kind: null, summary: row.subject ?? '', error: msg }
   }
+}
+
+/** A local date + time in a time zone → an exact moment (ISO). */
+export function localToIso(date: string, time: string, tz: string): string {
+  const [y, mo, d] = date.split('-').map(Number), [h, mi] = time.split(':').map(Number)
+  const guess = Date.UTC(y, mo - 1, d, h, mi)
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(guess)).map((p) => [p.type, p.value]))
+  const shown = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute))
+  return new Date(guess - (shown - guess)).toISOString()
+}
+
+/** Which account or card a balance alert is about: 'a:<id>' / 'c:<id>', or null if it can't tell. */
+export function balanceTarget(x: BalanceInfo, accounts: { id: string; name: string; institution: string | null; kind: string }[], cards: { id: string; name: string; last4: string | null }[]): string | null {
+  const text = `${x.institution ?? ''} ${x.account_hint ?? ''}`.toLowerCase()
+  if (x.what === 'card') {
+    const byLast4 = x.last4 ? cards.find((c) => c.last4 === x.last4) : undefined
+    if (byLast4) return `c:${byLast4.id}`
+    const byName = cards.filter((c) => c.name.toLowerCase().replace(/[^a-z0-9 ]/g, '').split(/\s+/).some((w) => w.length > 2 && text.replace(/[^a-z0-9 ]/g, '').includes(w)))
+    return byName.length === 1 ? `c:${byName[0].id}` : null
+  }
+  const inst = (a: { institution: string | null; name: string }) => (a.institution ?? a.name).toLowerCase()
+  const atBank = accounts.filter((a) => (text.includes('navy') && inst(a) === 'nfcu') || inst(a).split(/\s+/).some((w) => w.length > 2 && text.includes(w)))
+  if (!atBank.length) return null
+  const wantSavings = /saving|vault/.test(text)
+  const pick = atBank.filter((a) => (wantSavings ? a.kind !== 'checking' : a.kind === 'checking'))
+  const list = pick.length ? pick : atBank
+  return list.length === 1 ? `a:${list[0].id}` : null
+}
+
+/** A balance alert (forwarded, or a text shared from the phone): updates that balance right away. */
+async function applyBalance(db: SupabaseClient, owner: string, x: BalanceInfo, confident: boolean, summary: string): Promise<Record<string, unknown>> {
+  const [accQ, cardQ, setQ] = await Promise.all([
+    db.from('accounts').select('id, name, institution, kind, balance_as_of').eq('user_id', owner).eq('is_active', true),
+    db.from('cards').select('id, name, last4').eq('user_id', owner).eq('is_active', true),
+    db.from('settings').select('timezone').eq('user_id', owner).maybeSingle(),
+  ])
+  const accounts = (accQ.data ?? []) as { id: string; name: string; institution: string | null; kind: string; balance_as_of: string | null }[]
+  const cards = (cardQ.data ?? []) as { id: string; name: string; last4: string | null }[]
+  const target = balanceTarget(x, accounts, cards)
+  const amount = x.what === 'card' ? (x.balance ?? x.available)! : (x.available ?? x.balance)!
+  if (!target || !confident) return { status: 'unsure', kind: 'balance', summary, suggestion: { balance: { ...x, target } } }
+  const tz = (setQ.data as { timezone?: string } | null)?.timezone || 'America/New_York'
+  // As of when the alert says (so purchases logged after it still count); a day with no time = end of that day; never in the future
+  let asOf = new Date().toISOString()
+  if (x.as_of_date) {
+    const t = localToIso(x.as_of_date, x.as_of_time ?? '23:59', tz)
+    if (Date.parse(t) < Date.now()) asOf = t
+  }
+  const id = target.slice(2)
+  if (target.startsWith('a:')) {
+    const acct = accounts.find((a) => a.id === id)!
+    if (acct.balance_as_of && Date.parse(acct.balance_as_of) > Date.parse(asOf)) {
+      return { status: 'auto', kind: 'balance', summary: `${summary} (older than the balance Runway has, skipped)`, suggestion: { balance: { ...x, target } } }
+    }
+    await db.from('accounts').update({ balance: amount, balance_as_of: asOf }).eq('id', id)
+    return { status: 'auto', kind: 'balance', summary: `${acct.institution ?? acct.name}${acct.kind !== 'checking' ? ` ${acct.name}` : ''} balance updated: ${money$(amount)}`, suggestion: { balance: { ...x, target } } }
+  }
+  const card = cards.find((c) => c.id === id)!
+  await db.from('cards').update({ balance: amount }).eq('id', id)
+  return { status: 'auto', kind: 'balance', summary: `${card.name} balance updated: ${money$(amount)}`, suggestion: { balance: { ...x, target } } }
 }
 
 /**

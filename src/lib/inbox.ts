@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { DAYS, addDays, dateOf, daysBetween, shortDate } from './dates'
-import { addAffirmLoan, addAfterpayOrder, addIncome, billsAccountId, defaultIncomeAccount, installmentAmount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
+import { addAffirmLoan, addAfterpayOrder, addIncome, setAccountBalance, billsAccountId, defaultIncomeAccount, installmentAmount, logPurchase, type IncomeKind, type MoneyData, type PayWith } from './money'
 import { timeLabel } from './plans'
 import { createTrip, saveItem, type ItemKind, type PassType } from './trips'
 import { SENT_CATEGORY } from './types'
@@ -41,6 +41,11 @@ export interface OrderInfo {
   delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean; card_last4?: string | null
   pay_with?: string | null   // set when you review it: 'a:<account id>', 'c:<card id>' or 'none' (don't log as spending)
 }
+export interface BalanceInfo {
+  what: 'account' | 'card'; institution: string | null; account_hint: string | null; last4: string | null
+  balance: number | null; available: number | null; as_of_date: string | null; as_of_time: string | null
+  target?: string | null   // 'a:<account>' or 'c:<card>'
+}
 export interface AffirmInfo { store: string | null; payment_amount: number | null; payments: number | null; first_payment_on: string | null; total: number | null; purchased_on: string | null }
 export interface AfterpayInfo { store: string | null; total: number | null; purchased_on: string | null; first_payment_on: string | null; order_number: string | null }
 export interface AppointmentInfo { title: string | null; date: string | null; start_time: string | null; end_time: string | null; location: string | null; notes: string | null }
@@ -61,11 +66,11 @@ export interface MoneyOutInfo {
 export const VIA_LABEL: Record<string, string> = { zelle: 'Zelle', cashapp: 'Cash App', venmo: 'Venmo' }
 export interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; affirm?: AffirmInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; affirm?: AffirmInfo | null; balance?: BalanceInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 
 export type EmailStatus = 'reading' | 'review' | 'unsure' | 'auto' | 'added' | 'skipped' | 'merged' | 'error'
-export type CardKind = 'order' | 'afterpay' | 'affirm' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return'
+export type CardKind = 'order' | 'afterpay' | 'affirm' | 'balance' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return'
 
 export interface InboxEmail {
   id: string; source: 'forward' | 'paste'; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null
@@ -214,6 +219,11 @@ export function needsFixing(kind: CardKind, s: Suggestion, trips: { id: string }
     if (!s.money_in?.amount || s.money_in.amount <= 0) return 'Add the amount.'
     if (!s.money_in.account_id) return 'Pick which account it went into.'
   }
+  if (kind === 'balance') {
+    const x = s.balance
+    if (x?.available === null && x?.balance === null) return 'Add the balance.'
+    if (!x?.target) return 'Pick which account or card.'
+  }
   if (kind === 'affirm') {
     const x = s.affirm
     if (!x?.store?.trim()) return 'Add what it\'s for.'
@@ -308,6 +318,16 @@ export async function addFromEmail(e: InboxEmail, kind: CardKind, s: Suggestion,
     return `${a.title} added to ${shortDate(a.date!)}`
   }
 
+  if (kind === 'balance') {
+    const x = s.balance!
+    const amt = balanceAmount(x)!
+    const id = x.target!.slice(2)
+    if (x.target!.startsWith('a:')) await setAccountBalance(id, amt)
+    else { const { error } = await supabase.from('cards').update({ balance: amt }).eq('id', id); if (error) throw error }
+    await finish(e, s, kind)
+    return `Balance updated: $${amt.toFixed(2)}`
+  }
+
   if (kind === 'affirm') {
     const x = s.affirm!
     await addAffirmLoan({
@@ -384,6 +404,10 @@ async function callReader(body: Record<string, unknown>): Promise<{ status: stri
 }
 
 export const pasteEmail = (text: string) => callReader({ action: 'paste', text })
+/** A text message shared to Runway from the phone's Share menu. */
+export const shareText = (text: string) => callReader({ action: 'paste', text, shared: true })
+/** Bank: available balance first; card: what you owe. */
+export const balanceAmount = (x: BalanceInfo) => (x.what === 'card' ? (x.balance ?? x.available) : (x.available ?? x.balance))
 export const rereadEmail = (id: string) => callReader({ action: 'reread', id })
 
 /** Best guesses for a money-in email: what kind it is and which account it landed in. */

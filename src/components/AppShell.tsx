@@ -14,7 +14,7 @@ import { useIsPhone } from '../lib/useIsPhone'
 import { EMPTY_TRIPS, loadTrips, tripCostsDue, type TripsData } from '../lib/trips'
 import TripsView, { DayTrips, TravelCard, TripModeCard } from './Trips'
 import type { PhoneTab } from './PhoneShell'
-import { EMPTY_INBOX, arrivingToday, loadInbox, stillReading, waitingCount, type CardKind, type InboxData } from '../lib/inbox'
+import { EMPTY_INBOX, arrivingToday, loadInbox, shareText, stillReading, waitingCount, type CardKind, type InboxData } from '../lib/inbox'
 import { ArrivingToday, DayPackages, InboxHomeCard, InboxPanel } from './Inbox'
 import { comingUp, loadSpecialDates, type SpecialDate } from '../lib/specialDates'
 import { DatesHomeCard, DatesPanel, DatesPill, DayDates } from './Dates'
@@ -67,6 +67,23 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     navigator.serviceWorker?.addEventListener('message', onMsg)
     return () => navigator.serviceWorker?.removeEventListener('message', onMsg)
   }, [])
+  // Shared from the phone (Android Share menu → Runway): read it like a pasted email
+  const shareStarted = useRef(false)
+  useEffect(() => {
+    if (window.location.pathname !== '/share' || shareStarted.current) return
+    shareStarted.current = true
+    const q = new URLSearchParams(window.location.search)
+    const text = [q.get('title'), q.get('text'), q.get('url')].filter((x) => x && x.trim()).join('\n').trim()
+    window.history.replaceState(null, '', '/')
+    if (!text) return
+    showToast('Reading what you shared…')
+    void shareText(text).then(async (r) => {
+      showToast(r.status === 'error' ? `Couldn't read it: ${r.error ?? ''}` : r.status === 'auto' ? r.summary : 'Read it. It\'s in your Inbox.')
+      await Promise.all([reloadInbox(), reloadMoney()])
+      if (r.status === 'review' || r.status === 'unsure') { setInboxPaste(false); setInboxOpen(true) }
+    }).catch((e) => showToast(e instanceof Error ? e.message : 'Couldn\'t read it'))
+  })   // eslint-disable-line react-hooks/exhaustive-deps
+
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
   const subsLogged = useRef(false)
@@ -135,7 +152,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     showToast(line)
     await Promise.all([
       reloadInbox(),
-      kind === 'order' || kind === 'afterpay' || kind === 'money_in' || kind === 'return' || kind === 'money_out' || kind === 'affirm' ? reloadMoney() : Promise.resolve(),
+      kind === 'order' || kind === 'afterpay' || kind === 'money_in' || kind === 'return' || kind === 'money_out' || kind === 'affirm' || kind === 'balance' ? reloadMoney() : Promise.resolve(),
       kind === 'appointment' ? reloadPlans() : Promise.resolve(),
       kind === 'trip' ? reloadTrips() : Promise.resolve(),
     ])
