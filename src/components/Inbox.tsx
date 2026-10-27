@@ -6,7 +6,7 @@ import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } 
 import {
   ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, VIA_LABEL, addFromEmail, balanceAmount, moneyOutDefaults, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
   needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, recentRefunds, refundOptions, refundToFromOrder, refundToLabel, removeOrder, removeReturn,
-  rereadEmail, returnLine, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
+  rereadEmail, returnLine, shareText, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
   type AffirmInfo, type AfterpayInfo, type BalanceInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type ReturnInfo, type ReturnRec, type ReturnStage, type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
@@ -846,13 +846,15 @@ export function InboxPanel({ open, onClose, isPhone, focusPaste, today, data, re
 
   async function readPaste() {
     const text = paste.trim()
-    if (text.length < 20) { setPasteMsg({ ok: false, text: 'Paste the whole email, including the details.' }); return }
+    if (text.length < 8) { setPasteMsg({ ok: false, text: 'Paste the whole email or text.' }); return }
     setPasteBusy(true); setPasteMsg(null)
     try {
-      const r = await pasteEmail(text)
+      const looksLikeEmail = /^\s*(from|subject):/im.test(text) || text.length > 400
+      const r = looksLikeEmail ? await pasteEmail(text) : await shareText(text)
       setPaste('')
       setPasteMsg({ ok: r.status !== 'error', text: r.status === 'error' ? `Couldn't read it: ${r.error ?? ''}` : r.status === 'auto' ? `Done: ${r.summary}` : 'Read it. It\'s at the top of the Inbox.' })
-      await reload()
+      if (r.status === 'auto') await onAdded(`Done: ${r.summary}`, 'balance')   // money may have changed (balance, ride): reload it too
+      else await reload()
     } catch (err) {
       setPasteMsg({ ok: false, text: err instanceof Error ? err.message : 'Couldn\'t read it' })
     }
@@ -907,8 +909,8 @@ export function InboxPanel({ open, onClose, isPhone, focusPaste, today, data, re
         <ReturnsSection data={data} today={today} reload={reload} m={m} starting={starting} setStarting={setStarting} onAdded={onAdded} />
 
         <section aria-label="Paste an email" className="flex flex-col gap-2">
-          <h3 className={heading}>Paste an email</h3>
-          <p className="m-0 text-sm text-muted">For one that bounced or didn't forward: open it, select all, copy, and paste it here.</p>
+          <h3 className={heading}>Paste an email or text</h3>
+          <p className="m-0 text-sm text-muted">A text (like a balance alert): long-press it in Messages, Copy, paste it here. An email that didn't forward: select all, copy, paste.</p>
           <textarea ref={pasteRef} value={paste} onChange={(ev) => setPaste(ev.target.value)} rows={5} aria-label="Pasted email"
             placeholder="From: Amazon.com&#10;Subject: Your order…"
             className="w-full rounded-xl border border-line bg-surface p-3 text-fg text-sm focus:outline-2 focus:outline-accent-hi" />

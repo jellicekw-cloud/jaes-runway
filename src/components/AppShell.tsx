@@ -75,14 +75,27 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     const q = new URLSearchParams(window.location.search)
     const text = [q.get('title'), q.get('text'), q.get('url')].filter((x) => x && x.trim()).join('\n').trim()
     window.history.replaceState(null, '', '/')
-    if (!text) return
-    showToast('Reading what you shared…')
+    if (text) readShared(text)
+  })   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** A text from the phone (shared, or copied and pasted): read it, then show what happened. */
+  function readShared(text: string) {
+    showToast('Reading it…')
     void shareText(text).then(async (r) => {
       showToast(r.status === 'error' ? `Couldn't read it: ${r.error ?? ''}` : r.status === 'auto' ? r.summary : 'Read it. It\'s in your Inbox.')
       await Promise.all([reloadInbox(), reloadMoney()])
       if (r.status === 'review' || r.status === 'unsure') { setInboxPaste(false); setInboxOpen(true) }
     }).catch((e) => showToast(e instanceof Error ? e.message : 'Couldn\'t read it'))
-  })   // eslint-disable-line react-hooks/exhaustive-deps
+  }
+
+  /** "Paste a text": reads what you copied (Messages → long-press → Copy). */
+  async function pasteCopied() {
+    let text = ''
+    try { text = (await navigator.clipboard.readText()).trim() } catch { /* not allowed: use the paste box instead */ }
+    if (text) { readShared(text); return }
+    showToast('Paste it in the box below and tap Read it')
+    openInbox(true)
+  }
 
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
@@ -239,6 +252,11 @@ export default function AppShell({ email, userId }: { email: string; userId: str
           homeTop={<>
             <BirthdayCelebration list={dates} today={today} selfName={selfName} compact />
             <InboxHomeCard data={inbox} today={today} onOpen={() => openInbox()} />
+            <button type="button" onClick={() => void pasteCopied()}
+              className="w-full rounded-xl border border-dashed border-line bg-surface px-4 py-2.5 flex items-center gap-2 text-left text-fg cursor-pointer">
+              <span aria-hidden="true">📋</span>
+              <span className="flex-1"><b>Paste a text</b> <span className="text-sm text-muted">· a balance alert or any text you copied</span></span>
+            </button>
             {comingSoon && <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
             <TripModeCard today={today} data={trips} reload={reloadTrips} onOpenTrip={openTrip} />
             <ArrivingToday orders={inbox.orders} today={today} reload={reloadInbox} onOpen={() => openInbox()} />
