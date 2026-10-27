@@ -201,7 +201,11 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
     const order = { ...blankOrder(who), ...(s.order ?? {}) }
     const afterpay = order.paid_with_afterpay || s.afterpay ? { ...blankAfterpay(order.store), ...(s.afterpay ?? {}) } : s.afterpay ?? null
     if (s.afterpay) order.paid_with_afterpay = true
-    if (order.pay_with === undefined) order.pay_with = order.paid_with_affirm ? 'none:affirm' : defaultPayWith(m)
+    if (order.pay_with === undefined) {
+      // The card named in the email (by its last 4), else NFCU
+      const card = order.card_last4 ? m.cards.find((c) => c.last4 === order.card_last4) : undefined
+      order.pay_with = order.paid_with_affirm ? 'none:affirm' : card ? `c:${card.id}` : defaultPayWith(m)
+    }
     return { ...s, order, afterpay }
   }
   if (kind === 'afterpay') return { ...s, afterpay: { ...blankAfterpay(s.order?.store ?? who), total: s.order?.total ?? null, ...(s.afterpay ?? {}) } }
@@ -308,7 +312,8 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
       setDraft((d) => ({ ...d, money_out: moneyOutDefaults(d.money_out!, m) }))
     }
     if (kind === 'order' && draft.order && !draft.order.pay_with && draft.order.pay_with !== 'none' && m.accounts.length) {
-      const pw = defaultPayWith(m)
+      const card = draft.order.card_last4 ? m.cards.find((c) => c.last4 === draft.order!.card_last4) : undefined
+      const pw = draft.order.paid_with_affirm ? 'none:affirm' : card ? `c:${card.id}` : defaultPayWith(m)
       if (pw) setDraft((d) => ({ ...d, order: { ...d.order!, pay_with: d.order!.pay_with || pw } }))
     }
   }, [kind, draft.money_in, draft.money_out, draft.order, m])

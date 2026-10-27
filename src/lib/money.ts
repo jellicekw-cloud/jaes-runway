@@ -495,6 +495,29 @@ export async function logPurchase(d: MoneyData, p: { amount: number; description
   }
 }
 
+/**
+ * Fixes a logged entry. When what you paid with changes, the money moves with it: off the old card
+ * (or back into the old account) and onto the new one. Account balances follow automatically.
+ */
+export async function updateTransaction(d: MoneyData, t: Transaction, f: { amount: number; description: string; category: string; occurred_on: string; paid: string }): Promise<void> {
+  const account_id = f.paid.startsWith('a:') ? f.paid.slice(2) : null
+  const card_id = f.paid.startsWith('c:') ? f.paid.slice(2) : null
+  const { error } = await supabase.from('transactions')
+    .update({ amount: round2(f.amount), description: f.description.trim() || t.description, category: f.category, occurred_on: f.occurred_on, account_id, card_id }).eq('id', t.id)
+  if (error) throw error
+  if (t.source !== 'manual') return
+  // Card balances: take the old amount off the old card, put the new amount on the new card
+  const delta = new Map<string, number>()
+  if (t.card_id) delta.set(t.card_id, (delta.get(t.card_id) ?? 0) - t.amount)
+  if (card_id) delta.set(card_id, (delta.get(card_id) ?? 0) + round2(f.amount))
+  for (const [id, change] of delta) {
+    const card = d.cards.find((c) => c.id === id)
+    if (!card || card.balance === null || !round2(change)) continue
+    const { error: e2 } = await supabase.from('cards').update({ balance: Math.max(0, round2(card.balance + change)) }).eq('id', id)
+    if (e2) throw e2
+  }
+}
+
 export async function deleteTransaction(d: MoneyData, t: Transaction): Promise<void> {
   const { error } = await supabase.from('transactions').delete().eq('id', t.id)
   if (error) throw error

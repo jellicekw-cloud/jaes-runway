@@ -38,7 +38,7 @@ export interface ReturnInfo {
 export interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
   status: OrderStatus | null; carrier: string | null; tracking_number: string | null; expected_on: string | null
-  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean
+  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean; card_last4?: string | null
   pay_with?: string | null   // set when you review it: 'a:<account id>', 'c:<card id>' or 'none' (don't log as spending)
 }
 export interface AffirmInfo { store: string | null; payment_amount: number | null; payments: number | null; first_payment_on: string | null; total: number | null; purchased_on: string | null }

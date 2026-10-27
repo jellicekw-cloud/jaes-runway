@@ -2,9 +2,9 @@ import { useState, type ReactNode } from 'react'
 import { DAYS, dateOf, money, shortDate, weekStart } from '../lib/dates'
 import {
   challengeGoal, challengeSteps, currentSavingsStep, deleteTransaction, estimateBalance, nextPayday, parseMoney, paycheckTotal,
-  saveDeposit, setAccountBalance, setHideBalances, setPaySplit, undoDeposit, type MoneyData, type SavingsStep,
+  saveDeposit, setAccountBalance, setHideBalances, setPaySplit, undoDeposit, updateTransaction, type MoneyData, type SavingsStep,
 } from '../lib/money'
-import type { Account, Transaction } from '../lib/types'
+import { CATEGORIES, type Account, type Transaction } from '../lib/types'
 import { MoneyInSection } from './MoneyIn'
 import { SavingsSection } from './Savings'
 
@@ -232,26 +232,76 @@ function CurrentDeposit({ step, today, total, m, run }: { step: SavingsStep; tod
 
 function TxRow({ t, m, run }: { t: Transaction; m: MoneyData; run: Run }) {
   const [armed, setArmed] = useState(false)
+  const [editing, setEditing] = useState(false)
   const from = t.account_id ? m.accounts.find((a) => a.id === t.account_id)?.institution : t.card_id ? m.cards.find((c) => c.id === t.card_id)?.name : t.source === 'afterpay' ? 'Afterpay' : ''
   const auto = t.source === 'subscription'
+  const canEdit = t.source === 'manual'
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
-      <span className={`size-10 rounded-xl grid place-items-center text-sm font-extrabold shrink-0 ${auto ? 'bg-surface-2 text-muted' : 'bg-accent-soft text-accent'}`} aria-hidden="true">
-        {auto ? '↻' : t.category.slice(0, 2).toUpperCase()}
-      </span>
-      <span className="flex-1 min-w-0">
-        <b className="block truncate">{t.description}</b>
-        <span className="text-sm text-muted">{shortDate(t.occurred_on)}{from ? ` · ${from}` : ''}{auto ? ' · logged automatically' : ` · ${t.category}`}</span>
-      </span>
-      <b className="tnum">{money(t.amount)}</b>
-      {t.source === 'manual' && (
-        <button type="button" onBlur={() => setArmed(false)}
-          onClick={() => { if (armed) void run(() => deleteTransaction(m, t)); else setArmed(true) }}
-          aria-label={armed ? `Confirm delete ${t.description}` : `Delete ${t.description}`}
-          className={`h-9 px-2.5 rounded-lg text-sm font-bold cursor-pointer ${armed ? 'bg-bad text-white border border-bad' : 'bg-transparent border border-line text-muted'}`}>
-          {armed ? 'Delete?' : '✕'}
-        </button>
-      )}
+    <div className="flex flex-col" data-testid="tx-row">
+      <div className="flex items-center gap-3 px-4 py-2.5">
+        <span className={`size-10 rounded-xl grid place-items-center text-sm font-extrabold shrink-0 ${auto ? 'bg-surface-2 text-muted' : 'bg-accent-soft text-accent'}`} aria-hidden="true">
+          {auto ? '↻' : t.category.slice(0, 2).toUpperCase()}
+        </span>
+        <span className="flex-1 min-w-0">
+          <b className="block truncate">{t.description}</b>
+          <span className="text-sm text-muted">{shortDate(t.occurred_on)}{from ? ` · ${from}` : ''}{auto ? ' · logged automatically' : ` · ${t.category}`}</span>
+        </span>
+        <b className="tnum">{money(t.amount)}</b>
+        {canEdit && !editing && (
+          <button type="button" onClick={() => setEditing(true)} aria-label={`Edit ${t.description}`}
+            className="h-9 px-2.5 rounded-lg text-sm font-bold cursor-pointer bg-transparent border border-line text-accent">Edit</button>
+        )}
+        {canEdit && (
+          <button type="button" onBlur={() => setArmed(false)}
+            onClick={() => { if (armed) void run(() => deleteTransaction(m, t)); else setArmed(true) }}
+            aria-label={armed ? `Confirm delete ${t.description}` : `Delete ${t.description}`}
+            className={`h-9 px-2.5 rounded-lg text-sm font-bold cursor-pointer ${armed ? 'bg-bad text-white border border-bad' : 'bg-transparent border border-line text-muted'}`}>
+            {armed ? 'Delete?' : '✕'}
+          </button>
+        )}
+      </div>
+      {editing && <TxEdit t={t} m={m} run={run} onDone={() => setEditing(false)} />}
+    </div>
+  )
+}
+
+function TxEdit({ t, m, run, onDone }: { t: Transaction; m: MoneyData; run: Run; onDone: () => void }) {
+  const [amount, setAmount] = useState(t.amount.toFixed(2))
+  const [what, setWhat] = useState(t.description)
+  const [cat, setCat] = useState(t.category)
+  const [date, setDate] = useState(t.occurred_on)
+  const [paid, setPaid] = useState(t.card_id ? `c:${t.card_id}` : t.account_id ? `a:${t.account_id}` : '')
+  const [err, setErr] = useState('')
+  const cats: string[] = CATEGORIES.includes(t.category as typeof CATEGORIES[number]) ? [...CATEGORIES] : [...CATEGORIES, t.category]
+  const cls = 'h-10 w-full min-w-0 rounded-xl border border-line bg-surface-2 px-3 text-fg focus:outline-2 focus:outline-accent-hi'
+  const lab = 'flex flex-col gap-1 min-w-0 text-[11px] font-bold tracking-wider uppercase text-muted'
+  function save() {
+    const n = parseMoney(amount)
+    if (n === null || n === 0) { setErr('Enter the amount.'); return }
+    void run(() => updateTransaction(m, t, { amount: n, description: what, category: cat, occurred_on: date || t.occurred_on, paid })).then(onDone)
+  }
+  return (
+    <div className="mx-4 mb-3 grid grid-cols-2 gap-2 rounded-xl bg-surface-2 border border-line p-3" role="group" aria-label={`Edit ${t.description}`}>
+      <label className={lab}>Amount<input className={`${cls} tnum normal-case font-normal tracking-normal text-base`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Edit amount" /></label>
+      <label className={lab}>Date<input type="date" className={`${cls} normal-case font-normal tracking-normal text-base`} value={date} onChange={(e) => setDate(e.target.value)} aria-label="Edit date" /></label>
+      <label className={`${lab} col-span-2`}>What was it<input className={`${cls} normal-case font-normal tracking-normal text-base`} value={what} onChange={(e) => setWhat(e.target.value)} aria-label="Edit what" /></label>
+      <label className={lab}>Category
+        <select className={`${cls} normal-case font-normal tracking-normal text-base`} value={cat} onChange={(e) => setCat(e.target.value)} aria-label="Edit category">
+          {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </label>
+      <label className={lab}>Paid with
+        <select className={`${cls} normal-case font-normal tracking-normal text-base`} value={paid} onChange={(e) => setPaid(e.target.value)} aria-label="Edit paid with">
+          {m.accounts.filter((a) => a.kind === 'checking').map((a) => <option key={a.id} value={`a:${a.id}`}>{a.institution ?? a.name}</option>)}
+          {m.cards.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.name}</option>)}
+          <option value="">Not set</option>
+        </select>
+      </label>
+      {err && <p role="alert" className="col-span-2 m-0 text-sm font-bold text-bad">{err}</p>}
+      <div className="col-span-2 flex gap-2">
+        <button type="button" onClick={save} className="h-10 px-4 rounded-xl border-0 bg-accent text-accent-ink font-bold cursor-pointer">Save</button>
+        <button type="button" onClick={onDone} className="h-10 px-4 rounded-xl border border-line bg-surface text-fg font-bold cursor-pointer">Cancel</button>
+      </div>
     </div>
   )
 }

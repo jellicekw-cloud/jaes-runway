@@ -48,7 +48,7 @@ type ReturnStage = 'started' | 'dropped_off' | 'refunded'
 interface OrderInfo {
   store: string | null; order_number: string | null; items: string | null; total: number | null; ordered_on: string | null
   status: OrderStatus | null; carrier: string | null; tracking_number: string | null; expected_on: string | null
-  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean
+  delivered_on: string | null; delivered_time: string | null; paid_with_afterpay: boolean; paid_with_affirm?: boolean; card_last4?: string | null
 }
 interface AfterpayInfo { store: string | null; total: number | null; purchased_on: string | null; first_payment_on: string | null; order_number: string | null }
 interface AppointmentInfo { title: string | null; date: string | null; start_time: string | null; end_time: string | null; location: string | null; notes: string | null }
@@ -481,6 +481,7 @@ const TOOL = {
           expected_on: { ...nul('string'), description: 'expected delivery day YYYY-MM-DD. For a range ("Oct 22-24") use the LAST day. For a delay with no new date, null.' },
           delivered_on: nul('string'), delivered_time: { ...nul('string'), description: 'HH:MM 24-hour, if the email says when it was delivered' },
           paid_with_afterpay: { type: 'boolean' }, paid_with_affirm: { type: 'boolean' },
+          card_last4: { ...nul('string'), description: 'last 4 digits of the card it was charged to, if the email shows them (e.g. "Visa ending in 1234" → "1234")' },
         },
       },
       afterpay: {
@@ -622,6 +623,7 @@ function clean(r: Record<string, unknown>): Reading {
       ordered_on: isDay(o.ordered_on), status: statuses.includes(o.status as OrderStatus) ? o.status as OrderStatus : null,
       carrier: isText(o.carrier), tracking_number: isText(o.tracking_number), expected_on: isDay(o.expected_on),
       delivered_on: isDay(o.delivered_on), delivered_time: isTime(o.delivered_time), paid_with_afterpay: o.paid_with_afterpay === true, paid_with_affirm: o.paid_with_affirm === true,
+      card_last4: typeof o.card_last4 === 'string' && /^\d{4}$/.test(o.card_last4.trim()) ? o.card_last4.trim() : null,
     },
     afterpay: a && {
       store: isText(a.store), total: isNum(a.total), purchased_on: isDay(a.purchased_on), first_payment_on: isDay(a.first_payment_on), order_number: isText(a.order_number),
