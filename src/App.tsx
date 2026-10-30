@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, isConfigured } from './lib/supabase'
-import Login from './components/Login'
+import Login, { SetNewPassword } from './components/Login'
 import AppShell from './components/AppShell'
+
+// A password reset link lands here with #...type=recovery (read before Supabase tidies the address bar)
+const recoveryLink = typeof window !== 'undefined' && /type=recovery/.test(window.location.hash)
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [checking, setChecking] = useState(true)
+  const [recovering, setRecovering] = useState(recoveryLink)
 
   useEffect(() => {
     if (!isConfigured) { setChecking(false); return }
@@ -14,13 +18,17 @@ export default function App() {
       setSession(data.session)
       setChecking(false)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s))
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovering(true)
+      setSession(s)
+    })
     return () => sub.subscription.unsubscribe()
   }, [])
 
   if (!isConfigured) return <NotConfigured />
   if (checking) return <Splash />
   if (!session) return <Login />
+  if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />
   return <AppShell email={session.user.email ?? ''} userId={session.user.id} />
 }
 
