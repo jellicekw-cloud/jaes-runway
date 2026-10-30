@@ -1271,17 +1271,25 @@ async function unpaidDue(db: SupabaseClient, owner: string, days: string[]): Pro
   const from = days.reduce((a, b) => (a < b ? a : b))
   const [cards, bills, orders, pays] = await Promise.all([
     db.from('cards').select('id, name, due_day, minimum_payment, tracking_since').eq('user_id', owner).eq('is_active', true),
-    db.from('bills').select('id, name, due_day, amount, tracking_since').eq('user_id', owner).eq('is_active', true),
+    db.from('bills').select('*').eq('user_id', owner).eq('is_active', true),   // frequency comes from 13_payday_bills.sql
     db.from('afterpay_orders').select('*').eq('user_id', owner),   // provider / monthly / fixed payment come from 12_affirm.sql
     db.from('payments').select('card_id, bill_id, afterpay_order_id, installment_no, due_date').eq('user_id', owner).gte('due_date', from),
   ])
+  const set = await db.from('settings').select('pay_start, pay_every_days').eq('user_id', owner).maybeSingle()
+  const payStart = (set.data as { pay_start?: string | null } | null)?.pay_start ?? null
+  const payEvery = Number((set.data as { pay_every_days?: number } | null)?.pay_every_days ?? 14) || 14
   const paid = (pays.data ?? []) as { card_id: string | null; bill_id: string | null; afterpay_order_id: string | null; installment_no: number | null; due_date: string }[]
   const out: DueItem[] = []
   for (const k of days) {
     for (const c of (cards.data ?? []) as { id: string; name: string; due_day: number; minimum_payment: number | null; tracking_since: string }[]) {
       if (k >= c.tracking_since && dueOn(c.due_day, k) && !paid.some((p) => p.card_id === c.id && p.due_date === k)) out.push({ name: c.name, amount: c.minimum_payment === null ? null : Number(c.minimum_payment), date: k })
     }
-    for (const b of (bills.data ?? []) as { id: string; name: string; due_day: number; amount: number | null; tracking_since: string }[]) {
+    for (const b of (bills.data ?? []) as { id: string; name: string; due_day: number; amount: number | null; tracking_since: string; frequency?: string; autopay?: boolean }[]) {
+      if (b.frequency === 'payday') {   // every payday: autopay ones need nothing from you
+        if (b.autopay || k < b.tracking_since || !payStart || ((diffDays(payStart, k) % payEvery) + payEvery) % payEvery !== 0) continue
+        if (!paid.some((p) => p.bill_id === b.id && p.due_date === k)) out.push({ name: b.name, amount: b.amount === null ? null : Number(b.amount), date: k })
+        continue
+      }
       if (k >= b.tracking_since && dueOn(b.due_day, k) && !paid.some((p) => p.bill_id === b.id && p.due_date === k)) out.push({ name: b.name, amount: b.amount === null ? null : Number(b.amount), date: k })
     }
     type Plan = { id: string; name: string; total: number; order_date: string; installments: number; interval_days: number; provider?: string; interval_months?: number | null; payment_amount?: number | null; refunded?: number | null }

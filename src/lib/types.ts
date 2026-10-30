@@ -98,6 +98,7 @@ export interface Bill {
   color: string
   tracking_since: string
   is_active: boolean
+  frequency?: 'monthly' | 'payday'   // payday = every 2 weeks on payday (13_payday_bills.sql)
 }
 
 export interface Subscription {

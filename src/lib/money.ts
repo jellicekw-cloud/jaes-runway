@@ -201,7 +201,18 @@ export function obligationsOn(d: MoneyData, date: string, today: string): Obliga
   }
 
   for (const b of d.bills) {
-    if (date < b.tracking_since || !isMonthlyDueOn(b.due_day, date)) continue
+    if (date < b.tracking_since) continue
+    if (b.frequency === 'payday') {
+      if (!isPayday(d, date)) continue
+      // Drafts by itself on payday: shown like auto-pay, nothing to mark
+      if (b.autopay) {
+        out.push({
+          key: `bill:${b.id}:${date}`, kind: 'sub', sourceId: b.id, date, name: b.name, short: b.name,
+          color: b.color, amount: b.amount, status: 'auto', from: accountLabel(d, b.account_id, null), fromAccountId: b.account_id ?? billsAcct,
+        })
+        continue
+      }
+    } else if (!isMonthlyDueOn(b.due_day, date)) continue
     const payment = d.payments.find((p) => p.bill_id === b.id && p.due_date === date)
     out.push({
       key: `bill:${b.id}:${date}`, kind: 'bill', sourceId: b.id, date, name: b.name, short: b.name,
@@ -379,6 +390,9 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
     for (let k = addDays(asOfDate, 1); k <= today; k = addDays(k, 1)) {
       if (split && isPayday(d, k)) pay += split
       for (const s of d.subs) if (s.account_id === a.id && s.started_on <= k && subChargesOn(s, k)) auto += s.amount
+      for (const b of d.bills) {
+        if (b.frequency === 'payday' && b.autopay && b.amount && (b.account_id ?? billsAccountId(d)) === a.id && b.tracking_since <= k && isPayday(d, k)) auto += b.amount
+      }
     }
     if (pay) changes.push({ label: 'Paychecks', amount: pay })
     if (auto) changes.push({ label: 'Auto-pay', amount: -auto })

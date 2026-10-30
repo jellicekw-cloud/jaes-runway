@@ -674,8 +674,20 @@ function BillEditor({ bill: b, m, run }: { bill: Bill; m: MoneyData; run: Run })
         <div className="flex-1"><Field id={`${pre}-name`} label="Name" value={b.name} onCommit={(v) => { if (v.trim()) void save({ name: v.trim() }) }} /></div>
       </div>
       <div className="grid grid-cols-3 gap-2.5">
-        <Field id={`${pre}-day`} label="Due day" value={b.due_day} kind="number" onCommit={(v) => { const n = parseInt(v, 10); if (n >= 1 && n <= 31) void save({ due_day: n }) }} />
+        <label htmlFor={`${pre}-freq`} className="flex flex-col gap-1 min-w-0">
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">How often</span>
+          <select id={`${pre}-freq`} value={b.frequency ?? 'monthly'} onChange={(e) => void save({ frequency: e.target.value as Bill['frequency'] })}
+            className="h-10 rounded-lg border border-line bg-surface-2 px-2 text-fg focus:outline-2 focus:outline-accent-hi">
+            <option value="monthly">Monthly</option>
+            <option value="payday">Every payday</option>
+          </select>
+        </label>
+        {b.frequency === 'payday'
+          ? <span className="flex flex-col gap-1 text-xs font-bold tracking-wider uppercase text-muted">Due<span className="h-10 flex items-center text-sm normal-case tracking-normal text-fg">Every 2 weeks</span></span>
+          : <Field id={`${pre}-day`} label="Due day" value={b.due_day} kind="number" onCommit={(v) => { const n = parseInt(v, 10); if (n >= 1 && n <= 31) void save({ due_day: n }) }} />}
         <Field id={`${pre}-amt`} label="Amount" value={b.amount} money onCommit={(v) => void save({ amount: parseMoney(v) })} />
+      </div>
+      <div className="grid grid-cols-2 gap-2.5">
         <SourceSelect id={`${pre}-src`} label="Paid from" value={b.account_id ? `a:${b.account_id}` : ''} options={accounts} onChange={(v) => void save({ account_id: splitSource(v).account_id })} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -695,27 +707,40 @@ function AddBill({ accounts, run }: { accounts: { value: string; label: string }
   const [name, setName] = useState('')
   const [day, setDay] = useState('')
   const [amt, setAmt] = useState('')
+  const [freq, setFreq] = useState<'monthly' | 'payday'>('monthly')
   function submit(e: FormEvent) {
     e.preventDefault()
-    const d = parseInt(day, 10)
+    const d = freq === 'payday' ? 1 : parseInt(day, 10)
     if (!name.trim() || !(d >= 1 && d <= 31)) return
     void run(async () => {
-      await insertRow('bills', { name: name.trim(), due_day: d, amount: parseMoney(amt), ...{ account_id: splitSource(nfcu).account_id } })
-      setName(''); setDay(''); setAmt('')
+      const row: Record<string, unknown> = { name: name.trim(), due_day: d, amount: parseMoney(amt), account_id: splitSource(nfcu).account_id }
+      if (freq === 'payday') { row.frequency = 'payday'; row.autopay = true }
+      await insertRow('bills', row)
+      setName(''); setDay(''); setAmt(''); setFreq('monthly')
     })
   }
   return (
-    <form onSubmit={submit} className="grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2.5 items-end rounded-2xl border border-dashed border-muted p-4">
+    <form onSubmit={submit} className="grid grid-cols-2 sm:grid-cols-[2fr_1fr_1fr_1fr_auto] gap-2.5 items-end rounded-2xl border border-dashed border-muted p-4">
       <label htmlFor="nb-name" className="flex flex-col gap-1 col-span-2 sm:col-span-1">
-        <span className="text-xs font-bold tracking-wider uppercase text-muted">New monthly bill</span>
+        <span className="text-xs font-bold tracking-wider uppercase text-muted">New bill</span>
         <input id="nb-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Phone, Rent, Car note" required
           className="h-10 rounded-lg border border-line bg-surface-2 px-2.5 text-fg focus:outline-2 focus:outline-accent-hi" />
       </label>
-      <label htmlFor="nb-day" className="flex flex-col gap-1">
-        <span className="text-xs font-bold tracking-wider uppercase text-muted">Due day</span>
-        <input id="nb-day" inputMode="numeric" value={day} onChange={(e) => setDay(e.target.value)} placeholder="1–31" required
-          className="h-10 rounded-lg border border-line bg-surface-2 px-2.5 text-fg tnum focus:outline-2 focus:outline-accent-hi" />
+      <label htmlFor="nb-freq" className="flex flex-col gap-1">
+        <span className="text-xs font-bold tracking-wider uppercase text-muted">How often</span>
+        <select id="nb-freq" value={freq} onChange={(e) => setFreq(e.target.value as 'monthly' | 'payday')}
+          className="h-10 rounded-lg border border-line bg-surface-2 px-2 text-fg focus:outline-2 focus:outline-accent-hi">
+          <option value="monthly">Monthly</option>
+          <option value="payday">Every payday (auto)</option>
+        </select>
       </label>
+      {freq === 'monthly' && (
+        <label htmlFor="nb-day" className="flex flex-col gap-1">
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">Due day</span>
+          <input id="nb-day" inputMode="numeric" value={day} onChange={(e) => setDay(e.target.value)} placeholder="1–31" required
+            className="h-10 rounded-lg border border-line bg-surface-2 px-2.5 text-fg tnum focus:outline-2 focus:outline-accent-hi" />
+        </label>
+      )}
       <label htmlFor="nb-amt" className="flex flex-col gap-1">
         <span className="text-xs font-bold tracking-wider uppercase text-muted">Amount</span>
         <input id="nb-amt" inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="$0.00"
