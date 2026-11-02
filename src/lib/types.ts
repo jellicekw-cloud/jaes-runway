@@ -32,10 +32,11 @@ export interface Settings {
   pay_every_days: number
   hide_balances: boolean
   paydown_share?: number   // % of the safe extra to suggest on payday (08_paydown.sql)
+  cash_per_payday?: number // cash budget per paycheck (16_wallet.sql)
 }
 
 export interface Account {
-  id: string; name: string; institution: string | null; kind: 'checking' | 'savings' | 'vault'; balance: number | null; balance_as_of: string | null; role_note: string | null; sort: number
+  id: string; name: string; institution: string | null; kind: 'checking' | 'savings' | 'vault' | 'cash'; balance: number | null; balance_as_of: string | null; role_note: string | null; sort: number
   // savings (11_savings.sql): an automatic transfer in, and a soft goal
   auto_from_account_id?: string | null; auto_amount?: number | null; auto_next_on?: string | null; auto_every_days?: number; goal_amount?: number | null
 }

@@ -1,3 +1,4 @@
+import { WalletCard } from './Wallet'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, todayKey, weekStart } from '../lib/dates'
@@ -268,6 +269,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
             <StatementNudge m={moneyData} today={today} />
             <RecapCard m={moneyData} today={today} homeOnly />
             <AffordCheck m={moneyData} today={today} tripCosts={tripCosts} compact />
+            <WalletCard m={moneyData} today={today} hide={moneyData.settings?.hide_balances} reloadMoney={reloadMoney} onToast={showToast} />
           </> : null}
           homeDates={comingSoon ? null : <DatesHomeCard list={dates} today={today} onOpen={() => setDatesOpen(true)} />}
           homeBottom={tripsLoaded ? <TravelCard today={today} data={trips} onOpenTrip={openTrip} onPlan={() => openTrip(null)} /> : null}
