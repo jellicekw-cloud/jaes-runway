@@ -273,6 +273,16 @@ export async function bumpToBackup(item: TripItem): Promise<Backup | null> {
   return next
 }
 
+/** Switch your listing to another flight (from the live list). The old one is kept in the flight's notes. */
+export async function listOnFlight(item: TripItem, f: { flight: string; number: string; date: string; sched: string }, prev: string | null): Promise<void> {
+  const was = [item.flight_number, prev].filter(Boolean)[0]
+  const note = was ? `Was listed on ${was}${item.item_time ? ` (${item.item_time.slice(0, 5)})` : ''}` : null
+  await ok(supabase.from('trip_items').update({
+    flight_number: f.number.replace(/\s+/g, ' '), item_time: f.sched, item_date: f.date, flight_status: 'listed',
+    details: [note, item.details].filter(Boolean).join(' · ') || null,
+  }).eq('id', item.id))
+}
+
 export const STARTER_PACKING = [
   'ID & employee badge',
   'Phone chargers',

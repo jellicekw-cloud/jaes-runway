@@ -202,6 +202,19 @@ Deno.serve(async (req) => {
     return reply({ sent: n })
   }
 
+  if (payload.action === 'flights') {
+    const origin = String(payload.origin ?? '').toUpperCase().trim(), dest = String(payload.destination ?? '').toUpperCase().trim()
+    const date = isDay(payload.date)
+    if (!/^[A-Z]{3}$/.test(origin) || !/^[A-Z]{3}$/.test(dest) || !date) return reply({ error: 'Add the From and To airport codes (like ATL and MSY) to this flight.' }, 400)
+    if (!env('AERODATABOX_KEY')) return reply({ error: 'Flight lookups aren\'t set up yet (one-time setup: FLIGHTS_SETUP.md).', setup: true }, 400)
+    const now = env('RUNWAY_TEST_PUSH') === '1' && payload.now ? Date.parse(String(payload.now)) : Date.now()
+    try {
+      return reply(await flightsFor(db, origin, dest, date, String(payload.flight ?? ''), now))
+    } catch (e) {
+      return reply({ error: e instanceof Error ? e.message : String(e) }, 502)
+    }
+  }
+
   if (payload.action === 'cover_search') {
     try { return reply({ photos: await unsplashSearch(String(payload.query ?? '')) }) } catch (e) { return reply({ error: e instanceof Error ? e.message : String(e) }, 502) }
   }
@@ -912,6 +925,86 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
     await db.from('inbox_emails').update({ status: 'error', error: msg.slice(0, 500), summary: row.subject }).eq('id', row.id)
     return { id: row.id, status: 'error', kind: null, summary: row.subject ?? '', error: msg }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Flights (standby days): the next Delta flights on a route, live status
+// AeroDataBox through RapidAPI; key in Supabase secrets as AERODATABOX_KEY.
+// ---------------------------------------------------------------------------
+
+const ADB_BASE = (env('AERODATABOX_BASE') || 'https://aerodatabox.p.rapidapi.com').replace(/\/$/, '')
+const FLIGHT_CACHE_MIN = 10
+
+export interface FlightInfo {
+  flight: string; number: string; date: string; sched: string; revised: string | null; departs_utc: string
+  terminal: string | null; gate: string | null; status: string; delay_min: number; cancelled: boolean; gone: boolean
+}
+export const flightKey = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^([A-Z0-9]{2})0+(\d)/, '$1$2')
+
+/** One 12-hour window of departures from an airport, cached for a few minutes. */
+async function departures(db: SupabaseClient, origin: string, from: string, to: string): Promise<Record<string, unknown>[]> {
+  const key = `${origin}|${from}`
+  const hit = await db.from('flight_cache').select('data, fetched_at').eq('key', key).maybeSingle()
+  const row = hit.data as { data: { departures?: Record<string, unknown>[] }; fetched_at: string } | null
+  if (row && Date.now() - Date.parse(row.fetched_at) < FLIGHT_CACHE_MIN * 60000) return row.data.departures ?? []
+  const url = `${ADB_BASE}/flights/airports/iata/${origin}/${from}/${to}?direction=Departure&withLeg=true&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false&withLocation=false`
+  const res = await fetch(url, { headers: { 'X-RapidAPI-Key': env('AERODATABOX_KEY'), 'X-RapidAPI-Host': 'aerodatabox.p.rapidapi.com' } })
+  if (res.status === 204) return []
+  if (res.status === 429) throw new Error('The flight-data service is busy or the monthly free lookups are used up. Try again later, or use the Google button.')
+  if (!res.ok) throw new Error(`Flight lookup failed (${res.status})`)
+  const data = await res.json() as { departures?: Record<string, unknown>[] }
+  await db.from('flight_cache').upsert({ key, data, fetched_at: new Date().toISOString() })
+  return data.departures ?? []
+}
+
+const STATUS_TEXT: Record<string, string> = {
+  Expected: 'On time', Scheduled: 'On time', CheckIn: 'Check-in', Boarding: 'Boarding', GateClosed: 'Gate closed', Departed: 'Departed', EnRoute: 'In the air',
+  Approaching: 'Landing', Arrived: 'Landed', Delayed: 'Delayed', Canceled: 'Cancelled', CanceledUncertain: 'May be cancelled', Diverted: 'Diverted', Unknown: '',
+}
+
+/** Delta flights to `dest` from one window of departures. */
+export function parseDepartures(list: Record<string, unknown>[], dest: string): FlightInfo[] {
+  const out: FlightInfo[] = []
+  for (const x of list) {
+    const o = x as Record<string, any>   // eslint-disable-line @typescript-eslint/no-explicit-any
+    const airline = String(o.airline?.iata ?? '').toUpperCase()
+    const number = String(o.number ?? '')
+    if (airline !== 'DL' && !/^DL\s?\d/i.test(number)) continue
+    if (o.codeshareStatus === 'IsCodeshared') continue
+    const to = String(o.arrival?.airport?.iata ?? o.movement?.airport?.iata ?? '').toUpperCase()
+    if (to !== dest) continue
+    const dep = o.departure ?? o.movement ?? {}
+    const sched = String(dep.scheduledTime?.local ?? ''), schedUtc = String(dep.scheduledTime?.utc ?? '')
+    if (!sched || !schedUtc) continue
+    const rev = dep.revisedTime?.local ? String(dep.revisedTime.local) : null
+    const revUtc = dep.revisedTime?.utc ? String(dep.revisedTime.utc) : null
+    const utc = (s: string) => Date.parse(s.replace(' ', 'T').replace(/Z?$/, 'Z'))
+    const delay = revUtc ? Math.max(0, Math.round((utc(revUtc) - utc(schedUtc)) / 60000)) : 0
+    const status = String(o.status ?? 'Unknown')
+    out.push({
+      flight: flightKey(number), number: number.replace(/^DL\s*/i, 'DL '), date: sched.slice(0, 10), sched: sched.slice(11, 16), revised: rev && rev.slice(11, 16) !== sched.slice(11, 16) ? rev.slice(11, 16) : null,
+      departs_utc: new Date(utc(revUtc ?? schedUtc)).toISOString(), terminal: dep.terminal ? String(dep.terminal) : null, gate: dep.gate ? String(dep.gate) : null,
+      status: delay >= 15 && (status === 'Expected' || status === 'Unknown') ? 'Delayed' : STATUS_TEXT[status] ?? status, delay_min: delay,
+      cancelled: /^Canceled/.test(status), gone: ['Departed', 'EnRoute', 'Approaching', 'Arrived'].includes(status),
+    })
+  }
+  return out.sort((a, b) => a.departs_utc.localeCompare(b.departs_utc))
+}
+
+/** Your listed flight's live status + the rest of the day's Delta flights on that route (next morning's if none are left). */
+async function flightsFor(db: SupabaseClient, origin: string, dest: string, date: string, flight: string, now: number) {
+  const day = [
+    ...parseDepartures(await departures(db, origin, `${date}T00:00`, `${date}T11:59`), dest),
+    ...parseDepartures(await departures(db, origin, `${date}T12:00`, `${date}T23:59`), dest),
+  ]
+  const mine = flight ? day.find((f) => f.flight === flightKey(flight)) ?? null : null
+  const left = day.filter((f) => !f.gone && !f.cancelled && Date.parse(f.departs_utc) > now && f.flight !== mine?.flight)
+  let tomorrow: FlightInfo[] = [], nextDay: string | null = null
+  if (!left.length) {
+    nextDay = addDays(date, 1)
+    tomorrow = parseDepartures(await departures(db, origin, `${nextDay}T00:00`, `${nextDay}T11:59`), dest).filter((f) => !f.cancelled)
+  }
+  return { listed: mine, next: nextDay ? tomorrow : left, next_day: nextDay, cancelled_today: day.filter((f) => f.cancelled).length, checked_at: new Date().toISOString() }
 }
 
 /** A local date + time in a time zone → an exact moment (ISO). */

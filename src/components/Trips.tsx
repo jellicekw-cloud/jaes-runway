@@ -1,13 +1,14 @@
 import { CoverBanner, CoverImg, DayPhotos, PhotoAlbum } from './TripPhotos'
 import { coverOf } from '../lib/tripPhotos'
-import { useState, type FormEvent, type ReactNode } from 'react'
-import { DAYS, dateOf, daysBetween, money, shortDate } from '../lib/dates'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { DAYS, dateOf, daysBetween, money, shortDate, todayKey } from '../lib/dates'
+import { getFlights, routeSearchUrl, wantsLiveFlights, type FlightInfo, type FlightsAnswer, FlightsError } from '../lib/flights'
 import { parseMoney } from '../lib/money'
 import { timeLabel } from '../lib/plans'
 import { SWATCHES } from '../lib/types'
 import {
   FLIGHT_STATUS_LABEL, KIND_LABEL, PASS_LABEL, STARTER_PACKING, STATUS_LABEL,
-  activeTrip, addPacking, addPerson, bumpToBackup, createTrip, defaultItemDate, deletePacking, deleteItem, deleteTrip, itemsOn, nextTrip,
+  activeTrip, addPacking, addPerson, bumpToBackup, listOnFlight, createTrip, defaultItemDate, deletePacking, deleteItem, deleteTrip, itemsOn, nextTrip,
   passportProblem, personName, saveItem, setFlightStatus, setPassport, setTraveler, togglePacking, tripCost, tripDayNumber, updateTrip,
   type Backup, type ItemFields, type ItemKind, type PassType, type Trip, type TripItem, type TripStatus, type TripsData,
 } from '../lib/trips'
@@ -123,6 +124,7 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
                 )}
               </span>
             )}
+            {actions && reload && wantsLiveFlights(item, todayKey()) && <LiveFlights item={item} reload={reload} />}
             {actions && reload && item.flight_status === 'cleared' && item.pass_type === 'standby' && (
               <button type="button" disabled={busy} onClick={() => void act(() => setFlightStatus(item.id, 'listed'))}
                 className="self-start h-8 px-2.5 rounded-lg border border-line bg-surface text-muted text-xs font-bold cursor-pointer">Undo cleared</button>
@@ -131,6 +133,80 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
         )}
         {msg && <span role="status" className="text-sm font-bold text-accent">{msg}</span>}
       </div>
+    </div>
+  )
+}
+
+/** Standby day: your flight's live status and the next Delta flights on the route (refreshes every 10 minutes). */
+function LiveFlights({ item, reload }: { item: TripItem; reload: Reload }) {
+  const [ans, setAns] = useState<FlightsAnswer | null>(null)
+  const [err, setErr] = useState<{ msg: string; setup: boolean } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const load = useCallback(async () => {
+    setBusy(true)
+    try { setAns(await getFlights(item)); setErr(null) } catch (e) { setErr({ msg: errText(e), setup: e instanceof FlightsError && e.setup }) }
+    setBusy(false)
+  }, [item])
+  useEffect(() => {
+    void load()
+    const t = window.setInterval(() => { if (document.visibilityState === 'visible') void load() }, 10 * 60000)
+    return () => window.clearInterval(t)
+  }, [item.id, item.flight_number, item.item_date])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function switchTo(f: FlightInfo) {
+    setBusy(true); setMsg('')
+    try { await listOnFlight(item, f, null); await reload(); setMsg(`Listed on ${f.number} at ${timeLabel(f.revised ?? f.sched)}.`) } catch (e) { setMsg(errText(e)) }
+    setBusy(false)
+  }
+  const at = (f: FlightInfo) => (f.revised ? <><s className="text-muted">{timeLabel(f.sched)}</s> {timeLabel(f.revised)}</> : timeLabel(f.sched))
+  const where = (f: FlightInfo) => [f.terminal ? `T${f.terminal.replace(/^T/i, '')}` : null, f.gate ? `Gate ${f.gate}` : null].filter(Boolean).join(' · ')
+  const tone = (f: FlightInfo) => (f.cancelled ? 'text-bad' : f.delay_min >= 15 || /delay/i.test(f.status) ? 'text-warn' : 'text-pay-ink')
+  const mine = ans?.listed
+
+  return (
+    <div className="mt-1.5 rounded-xl border border-line bg-surface p-2.5 flex flex-col gap-2" aria-label="Live flights" role="group">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-xs font-bold tracking-widest uppercase text-muted">✈ Live · {item.origin} → {item.destination}</span>
+        <button type="button" disabled={busy} onClick={() => void load()} aria-label="Refresh flights"
+          className="h-7 px-2 rounded-lg border border-line bg-surface-2 text-fg text-xs font-bold cursor-pointer">{busy ? '…' : '↻'}</button>
+      </div>
+      {err && <p className="m-0 text-sm text-muted">{err.msg}</p>}
+      {mine && (
+        <div className="rounded-lg bg-surface-2 px-2.5 py-2 text-sm">
+          <b>Your flight {mine.number}</b> · {at(mine)}{where(mine) ? ` · ${where(mine)}` : ''}
+          <span className={`block font-bold ${tone(mine)}`}>{mine.cancelled ? 'Cancelled' : mine.delay_min >= 15 ? `${mine.status} · ${mine.delay_min} min late` : mine.status || 'On time'}</span>
+        </div>
+      )}
+      {ans && !mine && item.flight_number && <p className="m-0 text-xs text-muted">{item.flight_number} isn't in today's Delta list for this route. Check the flight number.</p>}
+      {ans && (
+        <>
+          <span className="text-xs font-bold tracking-wider uppercase text-muted">
+            {ans.next_day ? `Nothing left today · ${dayName(ans.next_day)} morning` : `Next Delta flights today · ${ans.next.length}`}
+          </span>
+          {ans.next.length === 0 && <p className="m-0 text-sm text-muted">No more Delta flights on this route{ans.next_day ? ' that morning either' : ''}.</p>}
+          <ul className="m-0 p-0 list-none flex flex-col">
+            {ans.next.slice(0, 6).map((f) => (
+              <li key={`${f.flight}${f.date}`} className="flex items-center gap-2 py-1.5 border-t border-line first:border-t-0 text-sm min-w-0">
+                <span className="flex-1 min-w-0">
+                  <span className="flex flex-wrap items-baseline gap-x-2"><b className="tnum whitespace-nowrap">{at(f)}</b><b className="whitespace-nowrap">{f.number}</b></span>
+                  <span className="block text-xs">
+                    {where(f) ? <span className="text-muted whitespace-nowrap">{where(f)} · </span> : null}
+                    <b className={`whitespace-nowrap ${tone(f)}`}>{f.cancelled ? 'Cancelled' : f.delay_min >= 15 ? `${f.delay_min} min late` : f.status || 'On time'}</b>
+                  </span>
+                </span>
+                {!f.cancelled && (
+                  <button type="button" disabled={busy} onClick={() => void switchTo(f)}
+                    className="h-8 px-2.5 rounded-lg border border-accent-hi bg-surface text-accent text-xs font-bold cursor-pointer shrink-0">List me</button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <span className="text-[11px] text-muted">Updated {new Date(ans.checked_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · seats & standby list: check your Delta travel app</span>
+        </>
+      )}
+      <a href={routeSearchUrl(item)} target="_blank" rel="noreferrer" className="self-start text-xs font-bold text-accent underline">Delta flights {item.origin} → {item.destination} on Google</a>
+      {msg && <span role="status" className="text-sm font-bold text-accent">{msg}</span>}
     </div>
   )
 }
