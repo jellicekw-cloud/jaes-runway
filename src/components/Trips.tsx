@@ -7,7 +7,7 @@ import { parseMoney } from '../lib/money'
 import { timeLabel } from '../lib/plans'
 import { SWATCHES } from '../lib/types'
 import {
-  FLIGHT_STATUS_LABEL, KIND_LABEL, PASS_LABEL, STARTER_PACKING, STATUS_LABEL,
+  CABIN_LABEL, FLIGHT_STATUS_LABEL, KIND_LABEL, saveSeats, seatsText, type Cabin, type Seat, PASS_LABEL, STARTER_PACKING, STATUS_LABEL,
   activeTrip, addPacking, addPerson, bumpToBackup, listOnFlight, createTrip, defaultItemDate, deletePacking, deleteItem, deleteTrip, itemsOn, nextTrip,
   passportProblem, personName, saveItem, setFlightStatus, setPassport, setTraveler, togglePacking, tripCost, tripDayNumber, updateTrip,
   type Backup, type ItemFields, type ItemKind, type PassType, type Trip, type TripItem, type TripStatus, type TripsData,
@@ -62,6 +62,7 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
 }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [seating, setSeating] = useState<null | 'clear' | 'edit'>(null)
   const date = part === 'end' ? item.end_date! : item.item_date
   const time = part === 'end' ? item.end_time : item.item_time
   const title = part === 'end'
@@ -108,12 +109,19 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
               {item.flight_status && <Chip tone={flightTone(item)}>{FLIGHT_STATUS_LABEL[item.flight_status]}</Chip>}
             </span>
             <Who data={data} ids={item.people} small />
+            {Object.keys(item.seats ?? {}).length > 0 && (
+              <span className="text-sm font-bold" data-testid="seats">💺 {seatsText(data, item)}</span>
+            )}
+            {seating && reload && (
+              <SeatForm item={item} data={data} clearing={seating === 'clear'} onCancel={() => setSeating(null)}
+                onSave={(seats) => void act(() => saveSeats(item, seats, seating === 'clear'), () => (seating === 'clear' ? 'Cleared! Have a good flight.' : 'Seats saved.')).then(() => setSeating(null))} />
+            )}
             {item.pass_type === 'standby' && item.alternates.length > 0 && (
               <span className="text-xs text-muted">Backups: {item.alternates.map((a) => [timeLabel(a.time), a.flight].filter(Boolean).join(' ')).join(' · ')}</span>
             )}
             {actions && reload && standbyOpen && (
               <span className="flex flex-wrap gap-1.5 mt-1">
-                <button type="button" disabled={busy} onClick={() => void act(() => setFlightStatus(item.id, 'cleared'), () => 'Cleared! Have a good flight.')}
+                <button type="button" disabled={busy || seating !== null} onClick={() => setSeating('clear')}
                   className="h-9 px-3 rounded-lg border-0 bg-pay text-white text-sm font-bold cursor-pointer disabled:opacity-60">Made it on</button>
                 {item.flight_status === 'listed' && (
                   <button type="button" disabled={busy}
@@ -125,6 +133,10 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
               </span>
             )}
             {actions && reload && wantsLiveFlights(item, todayKey()) && <LiveFlights item={item} reload={reload} />}
+            {actions && reload && !seating && (item.flight_status === 'cleared' || item.flight_status === 'confirmed') && (
+              <button type="button" onClick={() => setSeating('edit')}
+                className="self-start h-8 px-2.5 rounded-lg border border-line bg-surface text-fg text-xs font-bold cursor-pointer">{Object.keys(item.seats ?? {}).length ? 'Change seats' : '💺 Add seats'}</button>
+            )}
             {actions && reload && item.flight_status === 'cleared' && item.pass_type === 'standby' && (
               <button type="button" disabled={busy} onClick={() => void act(() => setFlightStatus(item.id, 'listed'))}
                 className="self-start h-8 px-2.5 rounded-lg border border-line bg-surface text-muted text-xs font-bold cursor-pointer">Undo cleared</button>
@@ -132,6 +144,43 @@ export function ItemCard({ item, part = 'start', data, reload, actions = true, o
           </>
         )}
         {msg && <span role="status" className="text-sm font-bold text-accent">{msg}</span>}
+      </div>
+    </div>
+  )
+}
+
+const CABINS: Cabin[] = ['first', 'comfort', 'main', 'premium', 'delta_one']
+
+/** Seat number and cabin for each person on the flight (asked when you tap "Made it on"). */
+function SeatForm({ item, data, clearing, onSave, onCancel }: {
+  item: TripItem; data: TripsData; clearing: boolean; onSave: (s: Record<string, Seat>) => void; onCancel: () => void
+}) {
+  const self = data.people.find((p) => p.is_self)?.id
+  const who = item.people.length ? item.people : self ? [self] : []
+  const [seats, setSeats] = useState<Record<string, Seat>>(() => Object.fromEntries(who.map((id) => [id, item.seats?.[id] ?? { seat: null, cabin: null }])))
+  const set = (id: string, p: Partial<Seat>) => setSeats((s) => ({ ...s, [id]: { ...s[id], ...p } }))
+  return (
+    <div className="mt-1.5 rounded-xl border border-pay bg-surface p-2.5 flex flex-col gap-2.5" role="group" aria-label="Seats">
+      <b className="text-sm">{clearing ? '🎉 Made it on! What seats did you get?' : 'Seats'}</b>
+      {who.map((id) => (
+        <div key={id} className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-sm font-bold truncate">{personName(data, id)}</span>
+            <input value={seats[id]?.seat ?? ''} onChange={(e) => set(id, { seat: e.target.value.toUpperCase() })} placeholder="14C" aria-label={`Seat for ${personName(data, id)}`}
+              autoComplete="off" className="h-9 w-20 rounded-lg border border-line bg-surface-2 px-2 text-fg tnum uppercase focus:outline-2 focus:outline-accent-hi" />
+          </div>
+          <div className="flex flex-wrap gap-1 pl-[88px]" role="group" aria-label={`Cabin for ${personName(data, id)}`}>
+            {CABINS.map((c) => (
+              <button key={c} type="button" aria-pressed={seats[id]?.cabin === c} onClick={() => set(id, { cabin: seats[id]?.cabin === c ? null : c })}
+                className={`h-7 px-2 rounded-full border text-xs font-bold cursor-pointer ${seats[id]?.cabin === c ? 'bg-accent border-accent text-accent-ink' : 'bg-surface-2 border-line text-fg'}`}>{CABIN_LABEL[c]}</button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => onSave(seats)} className="h-9 px-3 rounded-lg border-0 bg-pay text-white text-sm font-bold cursor-pointer">{clearing ? 'Save · made it on' : 'Save seats'}</button>
+        {clearing && <button type="button" onClick={() => onSave({})} className="h-9 px-3 rounded-lg border border-line bg-surface text-fg text-sm font-bold cursor-pointer">Skip seats</button>}
+        <button type="button" onClick={onCancel} className="h-9 px-3 rounded-lg border border-line bg-surface text-muted text-sm font-bold cursor-pointer">Cancel</button>
       </div>
     </div>
   )

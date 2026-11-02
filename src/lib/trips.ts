@@ -16,6 +16,9 @@ export const KIND_LABEL: Record<ItemKind, string> = { flight: 'Flight', hotel: '
 
 export interface Person { id: string; name: string; color: string; passport_expires: string | null; is_self: boolean; sort: number }
 export interface Backup { time: string | null; flight: string }
+export type Cabin = 'first' | 'comfort' | 'main' | 'premium' | 'delta_one'
+export const CABIN_LABEL: Record<Cabin, string> = { first: 'First', comfort: 'Comfort+', main: 'Main', premium: 'Premium Select', delta_one: 'Delta One' }
+export interface Seat { seat: string | null; cabin: Cabin | null }
 
 export interface TripItem {
   id: string
@@ -38,6 +41,7 @@ export interface TripItem {
   flight_status: FlightStatus | null
   alternates: Backup[]
   people: string[]              // who's on this flight
+  seats: Record<string, Seat>   // person id → seat and cabin (15_seats.sql)
 }
 
 export interface PackingItem { id: string; trip_id: string; text: string; packed: boolean; sort: number }
@@ -87,7 +91,7 @@ export async function loadTrips(): Promise<TripsData> {
   const [people, trips] = await Promise.all([
     supabase.from('people').select('id, name, color, passport_expires, is_self, sort').order('sort').order('created_at'),
     supabase.from('trips')
-      .select('*, trip_travelers(person_id), trip_items(*, trip_item_travelers(person_id)), packing_items(id, trip_id, text, packed, sort)')
+      .select('*, trip_travelers(person_id), trip_items(*, trip_item_travelers(*)), packing_items(id, trip_id, text, packed, sort)')
       .order('start_date', { ascending: true, nullsFirst: false }),
   ])
   if (people.error) throw people.error
@@ -100,7 +104,7 @@ export async function loadTrips(): Promise<TripsData> {
     cover_credit_name?: string | null; cover_credit_link?: string | null
     budget: unknown
     trip_travelers: { person_id: string }[]
-    trip_items: (Omit<TripItem, 'people' | 'cost' | 'alternates'> & { cost: unknown; alternates: unknown; trip_item_travelers: { person_id: string }[] })[]
+    trip_items: (Omit<TripItem, 'people' | 'cost' | 'alternates' | 'seats'> & { cost: unknown; alternates: unknown; trip_item_travelers: { person_id: string; seat?: string | null; cabin?: Cabin | null }[] })[]
     packing_items: PackingItem[]
   }
   return {
@@ -114,6 +118,7 @@ export async function loadTrips(): Promise<TripsData> {
         cost: num(i.cost),
         alternates: Array.isArray(i.alternates) ? (i.alternates as Backup[]) : [],
         people: (i.trip_item_travelers ?? []).map((x) => x.person_id),
+        seats: Object.fromEntries((i.trip_item_travelers ?? []).filter((x) => x.seat || x.cabin).map((x) => [x.person_id, { seat: x.seat ?? null, cabin: x.cabin ?? null }])),
       })).sort(sortItems),
       packing: (t.packing_items ?? []).slice().sort((a, b) => a.sort - b.sort || a.text.localeCompare(b.text)),
       cover: {
@@ -242,7 +247,7 @@ export async function setPassport(personId: string, expires: string | null): Pro
   await ok(supabase.from('people').update({ passport_expires: expires }).eq('id', personId))
 }
 
-export type ItemFields = Omit<TripItem, 'id' | 'trip_id' | 'people'>
+export type ItemFields = Omit<TripItem, 'id' | 'trip_id' | 'people' | 'seats'>
 
 /** Adds or replaces an itinerary item and who's on it. */
 export async function saveItem(tripId: string, fields: ItemFields, people: string[], id?: string): Promise<void> {
@@ -251,8 +256,30 @@ export async function saveItem(tripId: string, fields: ItemFields, people: strin
   if (id) await ok(supabase.from('trip_items').update(row).eq('id', id))
   else itemId = ((await ok(supabase.from('trip_items').insert(row).select('id').single())).data as { id: string }).id
   if (fields.kind !== 'flight') return
-  await ok(supabase.from('trip_item_travelers').delete().eq('item_id', itemId!))
-  if (people.length) await ok(supabase.from('trip_item_travelers').insert(people.map((person_id) => ({ item_id: itemId, person_id }))))
+  // Keep seats: only remove people taken off the flight, only add new ones
+  const had = ((await ok(supabase.from('trip_item_travelers').select('person_id').eq('item_id', itemId!))).data ?? []) as { person_id: string }[]
+  const gone = had.map((x) => x.person_id).filter((p) => !people.includes(p))
+  const added = people.filter((p) => !had.some((x) => x.person_id === p))
+  if (gone.length) await ok(supabase.from('trip_item_travelers').delete().eq('item_id', itemId!).in('person_id', gone))
+  if (added.length) await ok(supabase.from('trip_item_travelers').insert(added.map((person_id) => ({ item_id: itemId, person_id }))))
+}
+
+/** Who sits where. People not on the flight yet are added to it. Clearing standby: also marks it "Made it on". */
+export async function saveSeats(item: TripItem, seats: Record<string, Seat>, markCleared: boolean): Promise<void> {
+  for (const [person_id, s] of Object.entries(seats)) {
+    const seat = s.seat?.trim().toUpperCase() || null
+    if (item.people.includes(person_id)) {
+      await ok(supabase.from('trip_item_travelers').update({ seat, cabin: s.cabin }).eq('item_id', item.id).eq('person_id', person_id))
+    } else if (seat || s.cabin) {
+      await ok(supabase.from('trip_item_travelers').insert({ item_id: item.id, person_id, seat, cabin: s.cabin }))
+    }
+  }
+  if (markCleared) await setFlightStatus(item.id, 'cleared')
+}
+
+/** "Jae 14C Comfort+ · Thor 14D" */
+export function seatsText(d: TripsData, item: TripItem): string {
+  return Object.entries(item.seats ?? {}).map(([pid, s]) => [personName(d, pid), s.seat, s.cabin ? CABIN_LABEL[s.cabin] : null].filter(Boolean).join(' ')).join(' · ')
 }
 
 export async function deleteItem(id: string): Promise<void> {

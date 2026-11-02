@@ -55,6 +55,7 @@ interface AppointmentInfo { title: string | null; date: string | null; start_tim
 interface TripItemInfo {
   trip_id: string | null; kind: string | null; title: string | null; date: string | null; time: string | null; end_date: string | null; end_time: string | null
   confirmation: string | null; airline: string | null; flight_number: string | null; origin: string | null; destination: string | null; details: string | null; cost: number | null
+  seats?: { name: string | null; seat: string; cabin: string | null }[]
 }
 interface MoneyInInfo { amount: number | null; from: string | null; received_on: string | null; via: string | null; is_paycheck: boolean; account_hint: string | null }
 interface BalanceInfo {
@@ -575,6 +576,13 @@ const TOOL = {
           confirmation: nul('string'), airline: nul('string'), flight_number: nul('string'),
           origin: { ...nul('string'), description: 'airport code for flights' }, destination: nul('string'),
           details: nul('string'), cost: nul('number'),
+          seats: {
+            type: ['array', 'null'], description: 'seat assignments in the email or text (boarding pass, "you have cleared", upgrade/seat change)',
+            items: { type: 'object', properties: {
+              name: { ...nul('string'), description: 'passenger name as written' }, seat: { type: 'string', description: 'e.g. 14C' },
+              cabin: { type: ['string', 'null'], enum: ['first', 'comfort', 'main', 'premium', 'delta_one', null], description: 'First, Comfort+ (comfort), Main Cabin (main), Premium Select (premium), Delta One (delta_one)' },
+            } },
+          },
         },
       },
     },
@@ -591,6 +599,7 @@ Rules:
 - A new Affirm loan email ("Your Affirm loan is confirmed", "You bought ... with Affirm") is kind "affirm". Affirm payment reminders, autopay notices and payment receipts are kind "afterpay_payment".
 - Afterpay normally splits a purchase into 4 payments every 2 weeks. A brand-new Afterpay purchase is kind "afterpay". If the email says the first payment is due later (not taken today), first_payment_on is that later date.
 - Jae works for Delta and often flies non-rev standby or on award certificates; standby listings and itineraries are kind "trip".
+- A boarding pass, a "you have cleared standby" notice, or a seat assignment/change for a flight is kind "trip": fill trip_item.flight_number, trip_item.date and trip_item.seats (each passenger's seat and cabin).
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
 - Some items are text messages Jae shared from her phone (no email headers). Read them the same way. A bank or card balance alert ("NFCU: Avail bal $1,234.56 in Checking x1234", "Delta Community: UPDATE for SAVG0000 Current balance: $157.42 Available balance: $152.42") is kind "balance": fill balance.institution, balance.balance (current) and balance.available. "Delta Community" is Delta Community Credit Union (DECU).
 - Money Jae SENT ("You sent", "Payment sent", "You paid") with Zelle or Cash App is kind "money_out", never "money_in". Read who the money went to and the direction carefully.
@@ -669,6 +678,10 @@ function clean(r: Record<string, unknown>): Reading {
       date: isDay(t.date), time: isTime(t.time), end_date: isDay(t.end_date), end_time: isTime(t.end_time),
       confirmation: isText(t.confirmation)?.toUpperCase() ?? null, airline: isText(t.airline), flight_number: isText(t.flight_number),
       origin: isText(t.origin), destination: isText(t.destination), details: isText(t.details), cost: isNum(t.cost),
+      seats: Array.isArray(t.seats) ? (t.seats as Record<string, unknown>[]).map((x) => ({
+        name: isText(x?.name), seat: String(x?.seat ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 4),
+        cabin: ['first', 'comfort', 'main', 'premium', 'delta_one'].includes(String(x?.cabin)) ? String(x.cabin) : null,
+      })).filter((x) => /^\d{1,2}[A-K]$/.test(x.seat)) : [],
     },
     money_in: mi && {
       amount: isNum(mi.amount), from: isText(mi.from), received_on: isDay(mi.received_on), via: isText(mi.via), is_paycheck: mi.is_paycheck === true, account_hint: isText(mi.account_hint),
@@ -909,6 +922,12 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
       return done({ status: r.confident ? 'review' : 'unsure', kind: 'appointment', summary, suggestion: { appointment: r.appointment } })
     }
 
+    // Seats for a flight already in Runway (boarding pass, "you've cleared", seat change): fill them in right away
+    if (r.kind === 'trip' && r.trip_item?.seats?.length && r.trip_item.flight_number && r.trip_item.date) {
+      const placed = await placeSeats(db, owner, r.trip_item)
+      if (placed) return done({ status: 'auto', kind: 'trip', summary: placed, suggestion: { trip_item: r.trip_item } })
+    }
+
     if (r.kind === 'trip' && r.trip_item?.date) {
       const t = r.trip_item
       if (t.trip_id && !trips.some((x) => x.id === t.trip_id)) t.trip_id = null
@@ -1005,6 +1024,44 @@ async function flightsFor(db: SupabaseClient, origin: string, dest: string, date
     tomorrow = parseDepartures(await departures(db, origin, `${nextDay}T00:00`, `${nextDay}T11:59`), dest).filter((f) => !f.cancelled)
   }
   return { listed: mine, next: nextDay ? tomorrow : left, next_day: nextDay, cancelled_today: day.filter((f) => f.cancelled).length, checked_at: new Date().toISOString() }
+}
+
+/**
+ * Puts seats on a flight already in Runway (same flight number and day). Each seat goes to the
+ * person whose name matches; a single seat with no match goes to you (or the only person on the flight).
+ * A standby flight that gets a seat is cleared. Returns a summary line, or null if nothing matched.
+ */
+async function placeSeats(db: SupabaseClient, owner: string, t: TripItemInfo): Promise<string | null> {
+  const items = await db.from('trip_items').select('id, flight_number, pass_type, flight_status, trip_item_travelers(person_id)')
+    .eq('user_id', owner).eq('kind', 'flight').eq('item_date', t.date!)
+  const item = ((items.data ?? []) as { id: string; flight_number: string | null; pass_type: string | null; flight_status: string | null; trip_item_travelers: { person_id: string }[] }[])
+    .find((i) => i.flight_number && flightKey(i.flight_number) === flightKey(t.flight_number!))
+  if (!item) return null
+  const peopleQ = await db.from('people').select('id, name, is_self').eq('user_id', owner)
+  const people = (peopleQ.data ?? []) as { id: string; name: string; is_self: boolean }[]
+  const onFlight = item.trip_item_travelers.map((x) => x.person_id)
+  const words = (s: string) => s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 1)
+  const byName = (name: string | null) => {
+    if (!name) return undefined
+    const w = words(name)
+    return people.find((p) => words(p.name).some((pw) => w.includes(pw)))
+  }
+  const self = people.find((p) => p.is_self)
+  const seats = t.seats ?? []
+  const out: string[] = []
+  for (const s of seats) {
+    const who = byName(s.name) ?? (seats.length === 1 ? (onFlight.length === 1 ? people.find((p) => p.id === onFlight[0]) : self) : undefined)
+    if (!who) continue
+    const row = { item_id: item.id, person_id: who.id, user_id: owner, seat: s.seat, cabin: s.cabin }
+    const r = onFlight.includes(who.id)
+      ? await db.from('trip_item_travelers').update({ seat: s.seat, cabin: s.cabin }).eq('item_id', item.id).eq('person_id', who.id)
+      : await db.from('trip_item_travelers').insert(row)
+    if (r.error) throw new Error(r.error.message)
+    out.push(`${who.name} ${s.seat}`)
+  }
+  if (!out.length) return null
+  if (item.pass_type === 'standby' && item.flight_status !== 'cleared') await db.from('trip_items').update({ flight_status: 'cleared' }).eq('id', item.id)
+  return `${t.flight_number}: ${out.join(', ')}${item.pass_type === 'standby' ? ' · cleared ✈' : ''}`
 }
 
 /** A local date + time in a time zone → an exact moment (ISO). */
