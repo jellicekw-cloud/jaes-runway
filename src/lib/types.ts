@@ -36,7 +36,7 @@ export interface Settings {
 }
 
 export interface Account {
-  id: string; name: string; institution: string | null; kind: 'checking' | 'savings' | 'vault' | 'cash'; balance: number | null; balance_as_of: string | null; role_note: string | null; sort: number
+  id: string; name: string; institution: string | null; kind: 'checking' | 'savings' | 'vault' | 'cash' | 'stash'; balance: number | null; balance_as_of: string | null; role_note: string | null; sort: number
   // savings (11_savings.sql): an automatic transfer in, and a soft goal
   auto_from_account_id?: string | null; auto_amount?: number | null; auto_next_on?: string | null; auto_every_days?: number; goal_amount?: number | null
 }
