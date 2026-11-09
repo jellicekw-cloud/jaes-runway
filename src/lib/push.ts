@@ -13,6 +13,7 @@ export interface AlertPrefs {
   alert_side_work: boolean
   quiet_from: string
   quiet_until: string
+  alert_cycle?: boolean   // 18_cycle.sql
 }
 
 export const pushSupported = () =>
@@ -87,7 +88,7 @@ export const sendTestPush = () => call<{ sent: number }>({ action: 'push_test' }
 
 export async function loadAlertPrefs(): Promise<AlertPrefs | null> {
   const { data, error } = await supabase.from('settings')
-    .select('alert_morning, alert_morning_at, alert_inbox, alert_bills, alert_side_work, quiet_from, quiet_until').maybeSingle()
+    .select('*').maybeSingle()
   if (error) return null   // 07_alerts.sql not run yet
   if (!data) return null
   const t = (v: string) => String(v).slice(0, 5)

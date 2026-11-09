@@ -10,6 +10,8 @@ import { ChevronIcon } from './icons'
 import { itemsOn, tripsOn, type TripsData } from '../lib/trips'
 import { packagesOn, type Order } from '../lib/inbox'
 import { datesOn, type SpecialDate } from '../lib/specialDates'
+import { cycleStats, expectedOn, loadPeriods, periodOn, type Period } from '../lib/cycle'
+import { CYCLE_COLOR, CycleCard, CycleDay } from './Cycle'
 
 interface Props {
   userId: string
@@ -44,6 +46,12 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
       .catch((e) => { if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Couldn\'t load your journal') })
     return () => { cancelled = true }
   }, [first, last])
+
+  // Cycle (18_cycle.sql): null = not set up yet, so nothing shows
+  const [periods, setPeriods] = useState<Period[] | null>(null)
+  const reloadPeriods = useCallback(async () => { setPeriods(await loadPeriods()) }, [])
+  useEffect(() => { void reloadPeriods() }, [reloadPeriods])
+  const cycle = periods ? cycleStats(periods, today) : null
 
   const onSaved = useCallback((date: string, entry: JournalEntry | null) => {
     setJournal((list) => [...list.filter((e) => e.entry_date !== date), ...(entry ? [entry] : [])])
@@ -97,11 +105,14 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
               ...ob.filter((o) => o.status !== 'paid').slice(0, 3).map((o) => (o.kind === 'sub' ? 'var(--muted)' : o.color)),
             ].slice(0, 3)
             const isSel = k === selected, isToday = k === today
+            const onPeriod = periods ? Boolean(periodOn(periods, k, today)) : false
+            const expected = cycle ? expectedOn(cycle, k, today) : false
             return (
               <button key={k} type="button" onClick={() => onSelect(k)} aria-pressed={isSel}
-                aria-label={`${DAYS[dateOf(k).getDay()]}, ${MONTHS[month]} ${d}${pay ? ', payday' : ''}${away ? ', on a trip' : ''}${ob.length ? `, ${ob.length} due` : ''}${late ? ', overdue' : ''}`}
+                aria-label={`${DAYS[dateOf(k).getDay()]}, ${MONTHS[month]} ${d}${pay ? ', payday' : ''}${onPeriod ? ', period' : expected ? ', period expected' : ''}${away ? ', on a trip' : ''}${ob.length ? `, ${ob.length} due` : ''}${late ? ', overdue' : ''}`}
                 className={`relative h-14 rounded-xl flex flex-col items-center justify-center gap-0.5 p-0 cursor-pointer border text-fg overflow-hidden ${isSel ? 'bg-accent text-accent-ink border-accent' : pay ? 'bg-pay-soft border-pay text-pay-ink' : late ? 'bg-surface-2 border-bad' : isToday ? 'bg-surface-2 border-2 border-accent-hi' : away ? 'bg-accent-soft border-transparent' : 'bg-surface-2 border-transparent'}`}>
                 {away && <span aria-hidden="true" className="absolute left-0 right-0 top-0 h-1 bg-accent-hi" />}
+                {(onPeriod || expected) && <span aria-hidden="true" data-cycle={onPeriod ? 'period' : 'expected'} className="absolute left-2 right-2 bottom-0.5 h-[3px] rounded-full" style={{ background: CYCLE_COLOR, opacity: onPeriod ? 1 : 0.3 }} />}
                 <span className="text-[15px] font-bold leading-none tnum">{d}</span>
                 <span className="text-[11px] leading-none min-h-3">{entry?.mood ? MOOD_EMOJI[entry.mood] : pay ? '$' : ''}</span>
                 <span className="flex gap-0.5 min-h-1.5">{dots.map((c, j) => <i key={j} className="size-1.5 rounded-full" style={{ background: c }} />)}</span>
@@ -109,11 +120,14 @@ export default function MonthView({ userId, today, selected, onSelect, money: m,
             )
           })}
         </div>
-        <p className="m-0 text-xs text-muted">Green = payday · purple bar = on a trip · dots = trips, birthdays (pink), packages (teal), plans, to-dos, bills, auto-pay and savings · emoji = mood</p>
+        <p className="m-0 text-xs text-muted">Green = payday · purple bar = on a trip · dots = trips, birthdays (pink), packages (teal), plans, to-dos, bills, auto-pay and savings · emoji = mood{periods ? ' · pink line = period (faint = expected)' : ''}</p>
       </section>
+
+      {periods && <CycleCard periods={periods} today={today} reload={reloadPeriods} />}
 
       <section aria-label="Selected day" className="rounded-2xl border border-line bg-surface p-3.5 flex flex-col gap-3">
         <h2 className="m-0 text-xl font-bold">{DAYS[sel.getDay()]}, {MONTHS[month]} {sel.getDate()}</h2>
+        {periods && <CycleDay periods={periods} date={selected} today={today} reload={reloadPeriods} />}
         <DayBills date={selected} today={today} money={m} reloadMoney={reloadMoney} />
         {dayExtra?.(selected)}
         {!isPayday(m, selected) && obligationsOn(m, selected, today).length === 0 && !savingsOn(m, selected) && (

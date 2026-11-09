@@ -109,6 +109,9 @@ export function NotificationsPanel({ open, onClose, isPhone }: { open: boolean; 
                   <Toggle on={prefs.alert_inbox} onChange={(v) => void set({ alert_inbox: v })} title="✉ Inbox" note="Right away when a forwarded email is waiting for you to review." />
                   <Toggle on={prefs.alert_bills} onChange={(v) => void set({ alert_bills: v })} title="💳 Bills" note="The evening before a card, bill or Afterpay payment is due and not marked paid." />
                   <Toggle on={prefs.alert_side_work} onChange={(v) => void set({ alert_side_work: v })} title="💵 Side work" note="Late afternoon on the 15th and 30th if you haven't confirmed it landed." />
+                  {prefs.alert_cycle !== undefined && (
+                    <Toggle on={prefs.alert_cycle} onChange={(v) => void set({ alert_cycle: v })} title="🌸 Cycle heads-up" note='A line in the morning summary when your next period is likely soon. It just says "Heads-up for the next few days".' />
+                  )}
                 </section>
 
                 <section className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-2">

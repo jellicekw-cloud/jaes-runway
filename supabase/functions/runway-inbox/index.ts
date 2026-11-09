@@ -1064,6 +1064,28 @@ async function placeSeats(db: SupabaseClient, owner: string, t: TripItemInfo): P
   return `${t.flight_number}: ${out.join(', ')}${item.pass_type === 'standby' ? ' · cleared ✈' : ''}`
 }
 
+/**
+ * Cycle heads-up (discreet on purpose): 2 days before the estimated window opens, and the day it opens.
+ * Same estimate as the app: range of the last few cycle lengths.
+ */
+async function cycleHeadsUp(db: SupabaseClient, owner: string, today: string): Promise<boolean> {
+  const q = await db.from('periods').select('start_date, end_date').eq('user_id', owner).order('start_date', { ascending: false }).limit(8)
+  if (q.error) return false   // 18_cycle.sql not run yet
+  const starts = ((q.data ?? []) as { start_date: string }[]).map((p) => p.start_date).filter((d) => d <= today).sort()
+  if (starts.length < 2) return false
+  const lengths: number[] = []
+  for (let i = Math.max(1, starts.length - 6); i < starts.length; i++) {
+    const n = diffDays(starts[i - 1], starts[i])
+    if (n >= 15 && n <= 120) lengths.push(n)
+  }
+  if (!lengths.length) return false
+  const avg = Math.round(lengths.reduce((a, b) => a + b, 0) / lengths.length)
+  let min = Math.min(...lengths)
+  if (lengths.length === 1 || Math.max(...lengths) - min < 4) min = avg - (lengths.length === 1 ? 4 : 2)
+  const from = addDays(starts[starts.length - 1], min)
+  return today === addDays(from, -2) || today === from
+}
+
 /** A local date + time in a time zone → an exact moment (ISO). */
 export function localToIso(date: string, time: string, tz: string): string {
   const [y, mo, d] = date.split('-').map(Number), [h, mi] = time.split(':').map(Number)
@@ -1355,7 +1377,7 @@ async function once(db: SupabaseClient, owner: string, key: string, msg?: Push):
 interface AlertSettings {
   timezone: string; display_name: string; pay_start: string | null; pay_every_days: number
   alert_morning: boolean; alert_morning_at: string; alert_inbox: boolean; alert_bills: boolean; alert_side_work: boolean
-  quiet_from: string; quiet_until: string
+  quiet_from: string; quiet_until: string; alert_cycle?: boolean
 }
 
 function localNow(tz: string, fake = ''): { date: string; time: string } {
@@ -1373,8 +1395,7 @@ export function isQuiet(time: string, from: string, until: string): boolean {
 }
 
 async function alertSettings(db: SupabaseClient, owner: string): Promise<AlertSettings | null> {
-  const { data } = await db.from('settings').select('timezone, display_name, pay_start, pay_every_days, alert_morning, alert_morning_at, alert_inbox, alert_bills, alert_side_work, quiet_from, quiet_until')
-    .eq('user_id', owner).maybeSingle()
+  const { data } = await db.from('settings').select('*').eq('user_id', owner).maybeSingle()   // alert_cycle comes from 18_cycle.sql
   return data as AlertSettings | null
 }
 
@@ -1487,6 +1508,7 @@ async function morningLines(db: SupabaseClient, owner: string, s: AlertSettings,
   const [dueToday, late] = await Promise.all([unpaidDue(db, owner, [today]), unpaidDue(db, owner, back)])
   if (dueToday.length) lines.push(`💳 Due today: ${dueText(dueToday)}`)
   if (late.length) lines.push(`⚠️ Not marked paid: ${late.map((i) => `${i.name} (${i.date.slice(5).replace('-', '/')})`).join(', ')}`)
+  if (s.alert_cycle !== false && await cycleHeadsUp(db, owner, today)) lines.push('🌸 Heads-up for the next few days')
 
   if (s.pay_start) {
     const n = diffDays(s.pay_start, today)
