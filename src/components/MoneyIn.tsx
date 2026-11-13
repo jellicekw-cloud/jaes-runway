@@ -1,9 +1,10 @@
 import { useRef, useState, type FormEvent } from 'react'
-import { money, shortDate } from '../lib/dates'
+import { addDays, money, shortDate } from '../lib/dates'
 import {
-  INCOME_KIND_LABEL, addIncome, defaultIncomeAccount, deleteIncome, expectedOn, incomeOn, paychecksBetween, parseMoney, setExpectedAmount,
+  INCOME_KIND_LABEL, addIncome, defaultIncomeAccount, deleteIncome, expectedOn, incomeOn, isPayday, parseMoney, setExpectedAmount, updateIncomeAmount,
   waitingDeposits, type Expected, type IncomeKind, type MoneyData,
 } from '../lib/money'
+import { PaydayRow } from './DayBills'
 
 type Reload = () => Promise<void>
 
@@ -160,11 +161,6 @@ export function DayMoneyIn({ date, today, money: m, reloadMoney }: { date: strin
 
 export function MoneyInSection({ m, today, reloadMoney, onAdd }: { m: MoneyData; today: string; reloadMoney: Reload; onAdd: () => void }) {
   const [error, setError] = useState('')
-  const monthStart = today.slice(0, 8) + '01'
-  const thisMonth = m.income.filter((x) => x.received_on >= monthStart && x.received_on <= today)
-  const otherIn = thisMonth.reduce((t, x) => t + x.amount, 0)
-  const pay = paychecksBetween(m, monthStart, today)
-  const out = m.transactions.filter((t) => t.occurred_on >= monthStart && t.occurred_on <= today).reduce((t, x) => t + x.amount, 0)
   const recent = m.income.slice(0, 25)
   const waiting = waitingDeposits(m, today)
 
@@ -181,23 +177,8 @@ export function MoneyInSection({ m, today, reloadMoney, onAdd }: { m: MoneyData;
       </div>
       {error && <p role="alert" className="m-0 text-sm font-bold text-bad">{error}</p>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-        <div className="rounded-2xl bg-pay-soft text-pay-ink p-4">
-          <span className="block text-xs font-bold tracking-widest uppercase">In this month</span>
-          <b className="block text-2xl tnum">{money(pay + otherIn)}</b>
-          <span className="block text-sm font-semibold">{money(pay)} paychecks · {money(otherIn)} other</span>
-        </div>
-        <div className="rounded-2xl border border-line bg-surface p-4">
-          <span className={`block ${label}`}>Out this month</span>
-          <b className="block text-2xl tnum">{money(out)}</b>
-          <span className="block text-sm text-muted">Purchases, auto-pay and Afterpay logged</span>
-        </div>
-        <div className="rounded-2xl border border-line bg-surface p-4">
-          <span className={`block ${label}`}>Difference</span>
-          <b className={`block text-2xl tnum ${pay + otherIn - out < 0 ? 'text-bad' : 'text-pay-ink'}`}>{pay + otherIn - out < 0 ? '−' : '+'}{money(Math.abs(pay + otherIn - out))}</b>
-          <span className="block text-sm text-muted">Bill payments aren't counted here</span>
-        </div>
-      </div>
+      {/* Recent paydays: enter what really landed (In vs out and the recap use it) */}
+      {recentPaydays(m, today).map((d) => <PaydayRow key={d} date={d} today={today} m={m} reloadMoney={reloadMoney} />)}
 
       {waiting.map((e) => <ExpectedRow key={e.source.id + e.date} e={e} m={m} today={today} reloadMoney={reloadMoney} />)}
 
@@ -225,7 +206,7 @@ export function MoneyInSection({ m, today, reloadMoney, onAdd }: { m: MoneyData;
                 <b className="block truncate">{INCOME_KIND_LABEL[x.kind]}{x.from_name && x.from_name !== INCOME_KIND_LABEL[x.kind] ? ` · ${x.from_name}` : ''}</b>
                 <span className="text-sm text-muted">{acctName(m, x.account_id)}</span>
               </span>
-              <b className="tnum text-pay-ink">+{money(x.amount)}</b>
+              <IncomeAmount id={x.id} amount={x.amount} run={run} label={INCOME_KIND_LABEL[x.kind]} />
               <button type="button" aria-label={`Remove ${money(x.amount)} ${INCOME_KIND_LABEL[x.kind]}`} onClick={() => void run(() => deleteIncome(x.id))}
                 className="size-9 rounded-lg border border-line bg-transparent text-muted cursor-pointer">×</button>
             </li>
@@ -233,5 +214,27 @@ export function MoneyInSection({ m, today, reloadMoney, onAdd }: { m: MoneyData;
         </ul>
       )}
     </section>
+  )
+}
+
+/** The last two paydays (today included). */
+function recentPaydays(m: MoneyData, today: string): string[] {
+  const out: string[] = []
+  for (let i = 0; i < 40 && out.length < 2; i++) { const k = addDays(today, -i); if (isPayday(m, k)) out.push(k) }
+  return out
+}
+
+/** Tap the amount to fix it (side work that was a few dollars more, etc.). */
+function IncomeAmount({ id, amount, run, label }: { id: string; amount: number; run: (f: () => Promise<unknown>) => Promise<void>; label: string }) {
+  const [editing, setEditing] = useState(false)
+  const [v, setV] = useState(amount.toFixed(2))
+  if (!editing) return (
+    <button type="button" onClick={() => { setV(amount.toFixed(2)); setEditing(true) }} aria-label={`Change ${label} amount`}
+      className="bg-transparent border-0 p-0 tnum text-pay-ink font-bold cursor-pointer underline decoration-dotted">+{money(amount)}</button>
+  )
+  const save = () => { const n = parseMoney(v); setEditing(false); if (n && n > 0 && n !== amount) void run(() => updateIncomeAmount(id, n)) }
+  return (
+    <input autoFocus inputMode="decimal" value={v} onChange={(e) => setV(e.target.value)} onBlur={save} onKeyDown={(e) => { if (e.key === 'Enter') save() }}
+      aria-label={`${label} amount`} className="w-24 h-9 rounded-lg border border-accent-hi bg-surface-2 px-2 text-fg tnum font-bold focus:outline-none" />
   )
 }

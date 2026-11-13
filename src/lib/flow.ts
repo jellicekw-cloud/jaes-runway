@@ -1,5 +1,5 @@
 import { addDays, keyOf, lastDayOfMonth, MONTHS, shortDate } from './dates'
-import { isPayday, obligationsOn, paychecksBetween, paycheckTotal, savingsOn, expectedOn, type MoneyData } from './money'
+import { hasPayActual, isPayday, obligationsOn, paychecksBetween, paycheckTotal, savingsOn, expectedOn, type MoneyData } from './money'
 import { SIDE_WORK_DEFAULT } from './afford'
 
 // In vs out for your bank accounts (NFCU, SoFi): what came in, what left, and what you saved.
@@ -16,6 +16,7 @@ export interface Flow {
   inSoFar: number; outSoFar: number; savedSoFar: number
   inEnd: number; outEnd: number; savedEnd: number
   ins: Record<InGroup, number>; outs: Record<OutGroup, number>
+  payEstimated: number   // paydays so far without the real amount entered
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -32,6 +33,8 @@ export function cashFlow(m: MoneyData, from: string, to: string, today: string, 
 
   // --- so far ---
   ins.Paychecks = paychecksBetween(m, from, through)
+  let payEstimated = 0
+  for (let k = from; k <= through; k = addDays(k, 1)) if (isPayday(m, k) && !hasPayActual(m, k)) payEstimated++
   for (const x of m.income) {
     if (!inRange(x.received_on)) continue
     if (x.kind === 'side_work') ins['Side work'] += x.amount
@@ -97,7 +100,7 @@ export function cashFlow(m: MoneyData, from: string, to: string, today: string, 
   for (const g of OUT_GROUPS) outs[g] = r2(outs[g])
   return {
     label, from, to, through, inSoFar, outSoFar, savedSoFar,
-    inEnd: r2(inSoFar + inLater), outEnd: r2(outSoFar + outLater), savedEnd: r2(savedSoFar + savedLater), ins, outs,
+    inEnd: r2(inSoFar + inLater), outEnd: r2(outSoFar + outLater), savedEnd: r2(savedSoFar + savedLater), ins, outs, payEstimated,
   }
 }
 

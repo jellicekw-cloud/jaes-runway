@@ -69,9 +69,10 @@ function FlowBody({ f, offset, setOffset, open, setOpen, show, today }: {
       {open && (
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm" data-testid="inout-breakdown">
           <span className="text-xs font-bold uppercase tracking-wider text-muted col-span-2 mt-1">In</span>
-          {IN_GROUPS.filter((g) => f.ins[g]).map((g) => <Line key={g} label={g} v={show(f.ins[g])} />)}
+          {IN_GROUPS.filter((g) => f.ins[g]).map((g) => <Line key={g} label={g === 'Paychecks' && f.payEstimated ? 'Paychecks (usual amount)' : g} v={show(f.ins[g])} />)}
           <span className="text-xs font-bold uppercase tracking-wider text-muted col-span-2 mt-1">Out</span>
           {OUT_GROUPS.filter((g) => f.outs[g]).map((g) => <Line key={g} label={g} v={show(f.outs[g])} />)}
+          {f.payEstimated > 0 && <p className="col-span-2 m-0 mt-1 text-xs text-muted">Tap a payday on the calendar and "Enter real amount" to use what actually landed.</p>}
           <p className="col-span-2 m-0 mt-1 text-xs text-muted">Only money that left NFCU or SoFi. Card purchases count when you pay the card. Cash = cash you took out.</p>
         </div>
       )}

@@ -25,7 +25,11 @@ export interface MoneyData {
   extraPayments: ExtraPayment[]
   cardHistory: CardSnapshot[]
   transfers: Transfer[]
+  payActuals: PayActual[]
 }
+
+/** What a paycheck really was, per account (19_paychecks.sql). */
+export interface PayActual { id: string; pay_date: string; account_id: string; amount: number }
 
 /** Money you moved into or out of savings yourself (11_savings.sql). */
 export interface Transfer { id: string; from_account_id: string | null; to_account_id: string | null; amount: number; moved_on: string; note: string | null; created_at: string }
@@ -46,7 +50,7 @@ export interface IncomeSource { id: string; name: string; account_id: string | n
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [], transfers: [],
+  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [], transfers: [], payActuals: [],
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
@@ -73,13 +77,14 @@ export async function loadMoney(today: string): Promise<MoneyData> {
   const failed = [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions].find((r) => r.error)
   if (failed?.error) throw failed.error
   // Money in: tables come from 05_money_in.sql; until that's run, there's simply no money in yet
-  const [inc, srcs, extra, hist, moves] = await Promise.all([
+  const [inc, srcs, extra, hist, moves, actuals] = await Promise.all([
     supabase.from('income').select('id, received_on, amount, kind, from_name, account_id, income_source_id, expected_on, note, created_at')
       .gte('received_on', since).order('received_on', { ascending: false }).order('created_at', { ascending: false }),
     supabase.from('income_sources').select('id, name, account_id, days, expected_amount, is_active').eq('is_active', true).order('created_at'),
     supabase.from('card_extra_payments').select('id, card_id, amount, paid_on, account_id, created_at').order('paid_on', { ascending: false }),   // from 08_paydown.sql
     supabase.from('card_balance_history').select('card_id, recorded_on, balance').gte('recorded_on', addDays(today, -400)).order('recorded_on'),   // from 09_progress.sql
     supabase.from('transfers').select('id, from_account_id, to_account_id, amount, moved_on, note, created_at').gte('moved_on', since).order('moved_on', { ascending: false }),   // from 11_savings.sql
+    supabase.from('paycheck_actuals').select('id, pay_date, account_id, amount').gte('pay_date', addDays(today, -400)),   // from 19_paychecks.sql
   ])
   const ch = ((challenges.data ?? []) as SavingsChallenge[])[0]
   return {
@@ -97,6 +102,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     income: inc.error ? [] : ((inc.data ?? []) as Income[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     cardHistory: hist.error ? [] : ((hist.data ?? []) as CardSnapshot[]).map((x) => ({ ...x, balance: Number(x.balance) })),
     extraPayments: extra.error ? [] : ((extra.data ?? []) as ExtraPayment[]).map((x) => ({ ...x, amount: Number(x.amount) })),
+    payActuals: actuals.error ? [] : ((actuals.data ?? []) as PayActual[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     transfers: moves.error ? [] : ((moves.data ?? []) as Transfer[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     incomeSources: srcs.error ? [] : ((srcs.data ?? []) as IncomeSource[]).map((x) => ({ ...x, expected_amount: num(x.expected_amount), days: (x.days ?? []).map(Number) })),
   }
@@ -272,6 +278,36 @@ export function paycheckTotal(d: MoneyData): number {
   return d.splits.reduce((t, s) => t + s.amount, 0)
 }
 
+/** Did you enter what this paycheck really was? */
+export const hasPayActual = (d: MoneyData, date: string) => d.payActuals.some((x) => x.pay_date === date)
+
+/** One account's part of the paycheck that day: what you entered, else the usual split. */
+export function payInto(d: MoneyData, date: string, accountId: string): number {
+  const actual = d.payActuals.find((x) => x.pay_date === date && x.account_id === accountId)
+  if (actual) return actual.amount
+  if (hasPayActual(d, date)) return 0   // you entered the real amounts and this account got nothing
+  return d.splits.find((s) => s.account_id === accountId)?.amount ?? 0
+}
+
+/** The whole paycheck that day: what you entered, else the usual. */
+export function payTotalOn(d: MoneyData, date: string): number {
+  if (!hasPayActual(d, date)) return paycheckTotal(d)
+  return round2(d.payActuals.filter((x) => x.pay_date === date).reduce((t, x) => t + x.amount, 0))
+}
+
+/** Save the real paycheck amounts for a payday (per account). */
+export async function savePayActual(date: string, amounts: { account_id: string; amount: number }[]): Promise<void> {
+  const { error } = await supabase.from('paycheck_actuals').upsert(amounts.map((a) => ({ pay_date: date, account_id: a.account_id, amount: round2(a.amount) })), { onConflict: 'user_id,pay_date,account_id' })
+  if (error) {
+    if (/paycheck_actuals/.test(error.message)) throw new Error('Run 19_paychecks.sql in Supabase first.')
+    throw error
+  }
+}
+export async function clearPayActual(date: string): Promise<void> {
+  const { error } = await supabase.from('paycheck_actuals').delete().eq('pay_date', date)
+  if (error) throw error
+}
+
 /** Everything leaving your accounts from today until (not including) the next payday. */
 /** A trip cost (hotel, car, tour…) to pay on a set day. */
 export interface TripCost { date: string; amount: number; label: string }
@@ -385,10 +421,9 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
 
   if (!vault && asOfDate) {
     // Paychecks and auto-pay on days after the update, through today
-    const split = d.splits.find((s) => s.account_id === a.id)?.amount ?? 0
     let pay = 0, auto = 0
     for (let k = addDays(asOfDate, 1); k <= today; k = addDays(k, 1)) {
-      if (split && isPayday(d, k)) pay += split
+      if (isPayday(d, k)) pay += payInto(d, k, a.id)
       for (const s of d.subs) if (s.account_id === a.id && s.started_on <= k && subChargesOn(s, k)) auto += s.amount
       for (const b of d.bills) {
         if (b.frequency === 'payday' && b.autopay && b.amount && (b.account_id ?? billsAccountId(d)) === a.id && b.tracking_since <= k && isPayday(d, k)) auto += b.amount
@@ -752,6 +787,11 @@ export async function addIncome(d: MoneyData, f: { amount: number; kind: IncomeK
   }
 }
 
+export async function updateIncomeAmount(id: string, amount: number): Promise<void> {
+  const { error } = await supabase.from('income').update({ amount: round2(amount) }).eq('id', id)
+  if (error) throw error
+}
+
 export async function deleteIncome(id: string): Promise<void> {
   const { error } = await supabase.from('income').delete().eq('id', id)
   if (error) throw error
@@ -770,7 +810,7 @@ export function defaultIncomeAccount(d: MoneyData, kind: IncomeKind): string | n
 
 /** Paychecks that have landed in a range (inclusive). */
 export function paychecksBetween(d: MoneyData, from: string, to: string): number {
-  let n = 0
-  for (let k = from; k <= to; k = addDays(k, 1)) if (isPayday(d, k)) n++
-  return round2(n * paycheckTotal(d))
+  let t = 0
+  for (let k = from; k <= to; k = addDays(k, 1)) if (isPayday(d, k)) t += payTotalOn(d, k)
+  return round2(t)
 }

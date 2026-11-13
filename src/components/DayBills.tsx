@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { daysBetween, money, shortDate } from '../lib/dates'
 import {
-  hasMoneyIn, isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, saveDeposit, savingsOn, undoDeposit, undoPayment, type MoneyData, type Obligation,
+  clearPayActual, hasPayActual, hasMoneyIn, isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, payInto, payTotalOn, savePayActual, saveDeposit, savingsOn, undoDeposit, undoPayment, type MoneyData, type Obligation,
 } from '../lib/money'
 import { DayMoneyIn } from './MoneyIn'
 
@@ -25,17 +25,7 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
 
   return (
     <div className="flex flex-col gap-2.5">
-      {pay && (
-        <div className="flex items-center gap-3 rounded-xl bg-pay-soft text-pay-ink px-3.5 py-3 font-bold">
-          <span className="size-7 rounded-full bg-pay text-white grid place-items-center shrink-0">$</span>
-          <span>
-            Payday · {money(paycheckTotal(m))}
-            <span className="block text-sm font-semibold">
-              {m.splits.map((s) => `${money(s.amount)} ${m.accounts.find((a) => a.id === s.account_id)?.institution ?? ''}`).join(' · ')}
-            </span>
-          </span>
-        </div>
-      )}
+      {pay && <PaydayRow date={date} today={today} m={m} reloadMoney={reloadMoney} />}
 
       {moneyIn && <DayMoneyIn date={date} today={today} money={m} reloadMoney={reloadMoney} />}
 
@@ -165,6 +155,68 @@ function SavingsRow({ date, today, money: m, reloadMoney }: { date: string; toda
         </button>
       </div>
       {error && <span role="alert" className="text-sm font-bold text-bad">{error}</span>}
+    </div>
+  )
+}
+
+/** Payday: the usual split, or what really landed. On or after the day you can enter the real amounts. */
+export function PaydayRow({ date, today, m, reloadMoney }: { date: string; today: string; m: MoneyData; reloadMoney: () => Promise<void> }) {
+  const actual = hasPayActual(m, date)
+  const accts = m.accounts.filter((a) => a.kind === 'checking' && (m.splits.some((s) => s.account_id === a.id) || m.payActuals.some((x) => x.pay_date === date && x.account_id === a.id)))
+  const [editing, setEditing] = useState(false)
+  const [vals, setVals] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const name = (id: string) => m.accounts.find((a) => a.id === id)?.institution ?? 'account'
+  function start() {
+    setVals(Object.fromEntries(accts.map((a) => [a.id, payInto(m, date, a.id).toFixed(2)])))
+    setEditing(true); setErr('')
+  }
+  async function save() {
+    const amounts = accts.map((a) => ({ account_id: a.id, amount: parseMoney(vals[a.id] ?? '') ?? NaN }))
+    if (amounts.some((x) => Number.isNaN(x.amount) || x.amount < 0)) { setErr('Enter an amount for each account (0 is fine).'); return }
+    setBusy(true); setErr('')
+    try { await savePayActual(date, amounts); await reloadMoney(); setEditing(false) } catch (e) { setErr(e instanceof Error ? e.message : 'Couldn\'t save') }
+    setBusy(false)
+  }
+  const diff = Math.round((payTotalOn(m, date) - paycheckTotal(m)) * 100) / 100
+  return (
+    <div className="flex flex-col gap-2 rounded-xl bg-pay-soft text-pay-ink px-3.5 py-3" data-testid="payday">
+      <div className="flex items-center gap-3 font-bold">
+        <span className="size-7 rounded-full bg-pay text-white grid place-items-center shrink-0">$</span>
+        <span className="flex-1 min-w-0">
+          Payday · {money(payTotalOn(m, date))}{actual ? ' ✓' : ''}
+          <span className="block text-sm font-semibold">
+            {accts.map((a) => `${money(payInto(m, date, a.id))} ${name(a.id)}`).join(' · ')}
+            {actual ? (diff ? ` · ${diff > 0 ? '+' : '−'}${money(Math.abs(diff))} vs usual` : ' · same as usual') : date <= today ? ' · usual amount' : ''}
+          </span>
+        </span>
+        {date <= today && !editing && (
+          <button type="button" onClick={start} className="h-9 px-3 rounded-lg border border-pay bg-surface text-pay-ink text-sm font-bold cursor-pointer shrink-0">{actual ? 'Change' : 'Enter real amount'}</button>
+        )}
+      </div>
+      {editing && (
+        <div className="flex flex-col gap-2 rounded-lg bg-surface p-2.5 text-fg" role="group" aria-label="Real paycheck">
+          <span className="text-sm font-bold">What landed in each account?</span>
+          {accts.map((a) => (
+            <label key={a.id} className="flex items-center gap-2 text-sm">
+              <span className="w-16 shrink-0 font-bold">{name(a.id)}</span>
+              <span className="flex items-center gap-1 h-10 flex-1 rounded-xl border border-line bg-surface-2 px-2.5">
+                <span className="text-muted">$</span>
+                <input inputMode="decimal" aria-label={`Paycheck into ${name(a.id)}`} value={vals[a.id] ?? ''} onChange={(e) => setVals((v) => ({ ...v, [a.id]: e.target.value }))}
+                  className="flex-1 min-w-0 border-0 bg-transparent tnum text-fg font-bold focus:outline-none" />
+              </span>
+            </label>
+          ))}
+          {err && <span role="alert" className="text-sm font-bold text-bad">{err}</span>}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={busy} onClick={() => void save()} className="h-9 px-3 rounded-lg border-0 bg-pay text-white text-sm font-bold cursor-pointer">{busy ? 'Saving…' : 'Save'}</button>
+            <button type="button" onClick={() => setEditing(false)} className="h-9 px-3 rounded-lg border border-line bg-surface text-fg text-sm font-bold cursor-pointer">Cancel</button>
+            {actual && <button type="button" disabled={busy} onClick={() => { setBusy(true); void clearPayActual(date).then(reloadMoney).finally(() => { setBusy(false); setEditing(false) }) }}
+              className="h-9 px-3 rounded-lg border-0 bg-transparent text-muted text-sm font-bold underline cursor-pointer">Use usual amount</button>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
