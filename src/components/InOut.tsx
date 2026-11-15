@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { money, shortDate } from '../lib/dates'
 import { IN_GROUPS, OUT_GROUPS, monthFlow, paycheckFlow, type Flow } from '../lib/flow'
+import { cashIdeas } from '../lib/insights'
 import type { MoneyData } from '../lib/money'
 
 const remember = (k: string, v?: string) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v) } catch { /* fine */ } return null }
@@ -26,6 +27,7 @@ export function InOutCard({ m, today, hide }: { m: MoneyData; today: string; hid
         </div>
       </div>
       {!f ? <p className="m-0 text-sm text-muted">Set your payday on the Money tab to see this by paycheck.</p> : <FlowBody f={f} offset={offset} setOffset={setOffset} open={open} setOpen={setOpen} show={show} today={today} />}
+      <Ideas m={m} today={today} />
     </section>
   )
 }
@@ -92,3 +94,30 @@ function Row({ label, amount, width, color }: { label: string; amount: string; w
   )
 }
 const Line = ({ label, v }: { label: string; v: string }) => <><span>{label}</span><span className="text-right tnum">{v}</span></>
+
+/** 💡 The top 3 ideas to free up cash; the rest stay folded. */
+function Ideas({ m, today }: { m: MoneyData; today: string }) {
+  const [open, setOpen] = useState(false)
+  const [all, setAll] = useState(false)
+  const ideas = cashIdeas(m, today)
+  if (!ideas.length) return null
+  const shown = all ? ideas : ideas.slice(0, 3)
+  return (
+    <div className="border-t border-line pt-3 flex flex-col gap-2" data-testid="ideas">
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="self-start bg-transparent border-0 p-0 text-sm font-bold text-fg cursor-pointer">
+        💡 {ideas.length} idea{ideas.length === 1 ? '' : 's'} to free up cash <span className="text-accent">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <>
+          {shown.map((i) => (
+            <div key={i.key} className="rounded-xl bg-surface-2 px-3 py-2.5 flex gap-2.5">
+              <span aria-hidden="true">{i.icon}</span>
+              <span className="flex-1 min-w-0 text-sm"><b className="block">{i.title}</b><span className="text-muted">{i.detail}</span></span>
+            </div>
+          ))}
+          {ideas.length > 3 && !all && <button type="button" onClick={() => setAll(true)} className="self-start bg-transparent border-0 p-0 text-accent text-sm font-bold cursor-pointer">{ideas.length - 3} more</button>}
+        </>
+      )}
+    </div>
+  )
+}

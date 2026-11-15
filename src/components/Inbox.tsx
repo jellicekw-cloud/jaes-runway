@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { money, shortDate } from '../lib/dates'
+import { daysBetween, keyOf, money, shortDate } from '../lib/dates'
 import { INCOME_KIND_LABEL, installmentAmount, type IncomeKind, type MoneyData } from '../lib/money'
 import { timeLabel } from '../lib/plans'
 import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } from '../lib/trips'
@@ -209,7 +209,10 @@ function withDefaults(kind: CardKind, s: Suggestion, e: InboxEmail, m: MoneyData
     if (order.pay_with === undefined) {
       // The card named in the email (by its last 4), else NFCU
       const card = order.card_last4 ? m.cards.find((c) => c.last4 === order.card_last4) : undefined
-      order.pay_with = order.paid_with_affirm ? 'none:affirm' : card ? `c:${card.id}` : defaultPayWith(m)
+      // Already logged from a bank alert (same amount within 3 days)? Then don't log it again
+      const day = order.ordered_on ?? keyOf(new Date())
+      const already = order.total ? m.transactions.some((t) => Math.abs(t.amount - order.total!) < 0.005 && Math.abs(daysBetween(t.occurred_on, day)) <= 3) : false
+      order.pay_with = order.paid_with_affirm ? 'none:affirm' : already ? 'none' : card ? `c:${card.id}` : defaultPayWith(m)
     }
     return { ...s, order, afterpay }
   }

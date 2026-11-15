@@ -42,7 +42,7 @@ const reply = (body: unknown, status = 200) =>
 // ---------------------------------------------------------------------------
 
 type OrderStatus = 'ordered' | 'shipped' | 'out_for_delivery' | 'delivered' | 'delayed' | 'cancelled'
-type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return' | 'ride' | 'affirm' | 'balance' | 'other'
+type Kind = 'order' | 'shipping' | 'afterpay' | 'afterpay_payment' | 'appointment' | 'trip' | 'money_in' | 'money_out' | 'return' | 'ride' | 'affirm' | 'balance' | 'charge' | 'other'
 type ReturnStage = 'started' | 'dropped_off' | 'refunded'
 
 interface OrderInfo {
@@ -64,6 +64,7 @@ interface BalanceInfo {
   target?: string | null   // filled in by Runway: 'a:<account>' or 'c:<card>'
 }
 interface AffirmInfo { store: string | null; payment_amount: number | null; payments: number | null; first_payment_on: string | null; total: number | null; purchased_on: string | null }
+interface ChargeInfo { merchant: string | null; amount: number | null; date: string | null; approved: boolean; card_last4: string | null; account_hint: string | null; category: string | null }
 interface RideInfo { service: string | null; total: number | null; date: string | null; time: string | null; card_last4: string | null; payment_hint: string | null; dropoff: string | null }
 interface MoneyOutInfo { amount: number | null; to: string | null; sent_on: string | null; via: string | null; note: string | null; account_hint: string | null; status: 'sent' | 'requested' | 'failed' }
 interface ReturnInfo {
@@ -74,11 +75,11 @@ interface ReturnInfo {
 interface Reading {
   kind: Kind; confident: boolean; summary: string; existing_order_id: string | null; existing_return_id: string | null
   order: OrderInfo | null; afterpay: AfterpayInfo | null; appointment: AppointmentInfo | null; trip_item: TripItemInfo | null; money_in: MoneyInInfo | null
-  money_out: MoneyOutInfo | null; ret: ReturnInfo | null; ride: RideInfo | null; affirm: AffirmInfo | null; balance: BalanceInfo | null
+  money_out: MoneyOutInfo | null; ret: ReturnInfo | null; ride: RideInfo | null; affirm: AffirmInfo | null; balance: BalanceInfo | null; charge: ChargeInfo | null
 }
 interface Suggestion {
   order?: OrderInfo | null; afterpay?: AfterpayInfo | null; appointment?: AppointmentInfo | null; trip_item?: TripItemInfo | null; money_in?: MoneyInInfo | null
-  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; ride?: RideInfo | null; affirm?: AffirmInfo | null; balance?: BalanceInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
+  ret?: ReturnInfo | null; money_out?: MoneyOutInfo | null; ride?: RideInfo | null; affirm?: AffirmInfo | null; balance?: BalanceInfo | null; charge?: ChargeInfo | null; link_order_id?: string | null; code?: string | null; link?: string | null
 }
 interface EmailRow {
   id: string; from_name: string | null; from_address: string | null; subject: string | null; sent_at: string | null; body: string
@@ -472,8 +473,8 @@ const TOOL = {
     required: ['kind', 'confident', 'summary'],
     properties: {
       kind: {
-        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'balance', 'other'],
-        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for a payment on an existing Afterpay plan or Affirm loan, autopay notices, or an Afterpay/Affirm account notice. affirm = a NEW Affirm loan (purchase financed with Affirm: monthly payments). balance = a balance alert from her bank or credit card ("Your available balance is $X", "Balance alert", "current balance"). appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. money_out = money Jae SENT to a person with Zelle, Cash App or Venmo ("You sent $50 to ...", "Payment sent"), and also requests and failed or cancelled payments (say which in money_out.status). ride = a Lyft or Uber ride receipt (a ride Jae took and paid for; not promos, not driver earnings). return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
+        type: 'string', enum: ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'balance', 'charge', 'other'],
+        description: 'order = new purchase confirmation. shipping = shipped / out for delivery / delayed / delivered / cancelled update for a purchase. afterpay = a NEW purchase paid with Afterpay (plan created). afterpay_payment = reminder or receipt for a payment on an existing Afterpay plan or Affirm loan, autopay notices, or an Afterpay/Affirm account notice. affirm = a NEW Affirm loan (purchase financed with Affirm: monthly payments). charge = a bank or card transaction alert for one purchase ("Transaction approved: $8.42 at MCDONALDS", "declined"); not an order confirmation from a store. balance = a balance alert from her bank or credit card ("Your available balance is $X", "Balance alert", "current balance"). appointment = doctor, dentist, salon, service or other booked appointment. trip = flight, hotel, rental car, travel booking, standby listing. money_in = money Jae RECEIVED: Zelle, Cash App, Venmo, a bank deposit alert. money_out = money Jae SENT to a person with Zelle, Cash App or Venmo ("You sent $50 to ...", "Payment sent"), and also requests and failed or cancelled payments (say which in money_out.status). ride = a Lyft or Uber ride receipt (a ride Jae took and paid for; not promos, not driver earnings). return = anything about sending a purchase back or getting money back for it: return requested/started, return label, drop-off confirmed, return received, refund issued/processed (from the store or from Afterpay). other = anything else (marketing, newsletters, receipts with nothing to track).',
       },
       confident: { type: 'boolean', description: 'false if you are guessing about what kind it is or about the key dates' },
       summary: { type: 'string', description: 'One short line for Jae, e.g. "Amazon order: Echo Dot, arriving Thu Oct 23"' },
@@ -547,6 +548,17 @@ const TOOL = {
           total: { ...nul('number'), description: 'purchase / loan amount' }, purchased_on: nul('string'),
         },
       },
+      charge: {
+        ...nul('object'),
+        properties: {
+          merchant: { ...nul('string'), description: 'where, cleaned up: "MCDONALD\'S F1234 ATLANTA GA" → "McDonald\'s"' },
+          amount: nul('number'), date: { ...nul('string'), description: 'day of the charge YYYY-MM-DD' },
+          approved: { type: 'boolean', description: 'false if declined, denied, reversed or failed' },
+          card_last4: { ...nul('string'), description: 'last 4 digits of the card used, if shown' },
+          account_hint: { ...nul('string'), description: 'bank or card it was on, as written ("Navy Federal debit card", "Kohl\'s card")' },
+          category: { type: ['string', 'null'], enum: ['Food', 'Charging', 'Shopping', 'Beauty', 'Home', 'Kids', 'Fun', 'Rides', 'Other', null], description: 'Food for restaurants, fast food, groceries, coffee, delivery; Charging for EV charging' },
+        },
+      },
       ride: {
         ...nul('object'),
         properties: {
@@ -602,6 +614,7 @@ Rules:
 - A boarding pass, a "you have cleared standby" notice, or a seat assignment/change for a flight is kind "trip": fill trip_item.flight_number, trip_item.date and trip_item.seats (each passenger's seat and cabin).
 - If the email is about an order already in Runway, set existing_order_id and still fill order with what changed.
 - Some items are text messages Jae shared from her phone (no email headers). Read them the same way. A bank or card balance alert ("NFCU: Avail bal $1,234.56 in Checking x1234", "Delta Community: UPDATE for SAVG0000 Current balance: $157.42 Available balance: $152.42") is kind "balance": fill balance.institution, balance.balance (current) and balance.available. "Delta Community" is Delta Community Credit Union (DECU).
+- A bank or card alert for one purchase ("Transaction approved", "Purchase alert", "Your card was charged", "declined") is kind "charge": fill charge.merchant (clean name), amount, date, approved, and category. Zelle/Cash App transfers are money_out, and deposits are money_in, not charge.
 - Money Jae SENT ("You sent", "Payment sent", "You paid") with Zelle or Cash App is kind "money_out", never "money_in". Read who the money went to and the direction carefully.
 - Money Jae received (Zelle from Navy Federal, side-work deposits into SoFi, Cash App) is kind "money_in". Her regular Delta payroll deposit is money_in with is_paycheck true.
 - Returns and refunds for a purchase (e.g. Amazon "Return request confirmed", "Dropoff confirmed", "Advance refund issued", "Refund processed") are kind "return", never "shipping" or "money_in". Fill the return object. If it matches one of "Returns in Runway", set existing_return_id.
@@ -648,10 +661,10 @@ async function askClaude(row: EmailRow, today: string, orders: OrderRow[], trips
 
 /** Keeps only well-formed values from the AI's answer. */
 function clean(r: Record<string, unknown>): Reading {
-  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'balance', 'other']
+  const kinds: Kind[] = ['order', 'shipping', 'afterpay', 'afterpay_payment', 'appointment', 'trip', 'money_in', 'money_out', 'return', 'ride', 'affirm', 'balance', 'charge', 'other']
   const statuses: OrderStatus[] = ['ordered', 'shipped', 'out_for_delivery', 'delivered', 'delayed', 'cancelled']
   const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null)
-  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return), mo = obj(r.money_out), rd = obj(r.ride), af = obj(r.affirm), bl = obj(r.balance)
+  const o = obj(r.order), a = obj(r.afterpay), ap = obj(r.appointment), t = obj(r.trip_item), mi = obj(r.money_in), rt = obj(r.return), mo = obj(r.money_out), rd = obj(r.ride), af = obj(r.affirm), bl = obj(r.balance), ch = obj(r.charge)
   const stages: ReturnStage[] = ['started', 'dropped_off', 'refunded']
   const itemKinds = ['flight', 'hotel', 'car', 'drive', 'food', 'event', 'other']
   return {
@@ -694,6 +707,12 @@ function clean(r: Record<string, unknown>): Reading {
     affirm: af && {
       store: isText(af.store), payment_amount: isNum(af.payment_amount), payments: isNum(af.payments) ? Math.round(isNum(af.payments)!) : null,
       first_payment_on: isDay(af.first_payment_on), total: isNum(af.total), purchased_on: isDay(af.purchased_on),
+    },
+    charge: ch && {
+      merchant: isText(ch.merchant), amount: isNum(ch.amount), date: isDay(ch.date), approved: ch.approved !== false,
+      card_last4: typeof ch.card_last4 === 'string' && /^\d{4}$/.test(ch.card_last4.trim()) ? ch.card_last4.trim() : null,
+      account_hint: isText(ch.account_hint),
+      category: ['Food', 'Charging', 'Shopping', 'Beauty', 'Home', 'Kids', 'Fun', 'Rides', 'Other'].includes(String(ch.category)) ? String(ch.category) : null,
     },
     ride: rd && {
       service: isText(rd.service), total: isNum(rd.total), date: isDay(rd.date), time: isTime(rd.time),
@@ -908,6 +927,12 @@ async function readEmail(db: SupabaseClient, owner: string, row: EmailRow): Prom
       const x = r.affirm
       x.store = x.store ?? r.order?.store ?? null
       return done({ status: r.confident && x.payment_amount && x.payments ? 'review' : 'unsure', kind: 'affirm', summary, suggestion: { affirm: x } })
+    }
+
+    if (r.kind === 'charge' && r.charge) {
+      const x = r.charge
+      if (!x.approved) return done({ status: 'skipped', kind: 'charge', summary: `${summary} (declined, nothing counted)`, suggestion: { charge: x } })
+      if (x.amount && x.amount > 0) return done(await logCharge(db, owner, x, today, summary))
     }
 
     if (r.kind === 'ride' && r.ride?.total) return done(await logRide(db, owner, r.ride, trips, today, summary))
@@ -1159,6 +1184,41 @@ async function applyBalance(db: SupabaseClient, owner: string, x: BalanceInfo, c
   const card = cards.find((c) => c.id === id)!
   await db.from('cards').update({ balance: amount }).eq('id', id)
   return { status: 'auto', kind: 'balance', summary: `${card.name} balance updated: ${money$(amount)}`, suggestion: { balance: { ...x, target } } }
+}
+
+/**
+ * A bank/card purchase alert (approved): logged quietly as spending. Skipped if the same amount is already
+ * logged within 3 days (an order card, a Lyft ride, something typed in). Kohl's and Victoria's Secret go on
+ * those store cards; a card's last 4 picks that card; otherwise the bank it came from (NFCU by default).
+ */
+async function logCharge(db: SupabaseClient, owner: string, x: ChargeInfo, today: string, summary: string): Promise<Record<string, unknown>> {
+  const date = x.date ?? today
+  const amount = Math.round(x.amount! * 100) / 100
+  const dup = await db.from('transactions').select('id, description').eq('user_id', owner).eq('amount', amount)
+    .gte('occurred_on', addDays(date, -3)).lte('occurred_on', addDays(date, 3)).limit(1)
+  if (dup.data?.length) return { status: 'auto', kind: 'charge', summary: `${summary} (already logged)`, suggestion: { charge: x } }
+  const [cardsQ, acctsQ] = await Promise.all([
+    db.from('cards').select('id, name, last4, balance').eq('user_id', owner).eq('is_active', true),
+    db.from('accounts').select('id, name, institution, kind').eq('user_id', owner).eq('kind', 'checking'),
+  ])
+  const cards = (cardsQ.data ?? []) as { id: string; name: string; last4: string | null; balance: number | null }[]
+  const accts = (acctsQ.data ?? []) as { id: string; name: string; institution: string | null }[]
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const where = norm(`${x.merchant ?? ''}`)
+  const storeCard = /kohls/.test(where) ? cards.find((c) => /kohls/.test(norm(c.name)))
+    : /victoriassecret|victoria/.test(where) ? cards.find((c) => /victoria/.test(norm(c.name))) : undefined
+  const card = (x.card_last4 ? cards.find((c) => c.last4 === x.card_last4) : undefined) ?? storeCard
+  const hint = (x.account_hint ?? '').toLowerCase()
+  const acct = card ? undefined
+    : accts.find((a) => hint && ((hint.includes('navy') && a.institution === 'NFCU') || (a.institution ?? a.name).toLowerCase().split(/\s+/).some((w) => w.length > 2 && hint.includes(w))))
+      ?? accts.find((a) => a.institution === 'NFCU') ?? accts[0]
+  const category = card && storeCard ? 'Shopping' : x.category ?? 'Other'
+  const ins = await db.from('transactions').insert({
+    user_id: owner, occurred_on: date, amount, description: x.merchant ?? 'Card purchase', category, source: 'manual', card_id: card?.id ?? null, account_id: acct?.id ?? null,
+  })
+  if (ins.error) throw new Error(ins.error.message)
+  if (card && card.balance !== null) await db.from('cards').update({ balance: Math.round((Number(card.balance) + amount) * 100) / 100 }).eq('id', card.id)
+  return { status: 'auto', kind: 'charge', summary: `${x.merchant ?? 'Purchase'} ${money$(amount)} · ${category} · ${card?.name ?? acct?.institution ?? acct?.name ?? 'logged'}`, suggestion: { charge: x } }
 }
 
 /**
