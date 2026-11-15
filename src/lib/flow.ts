@@ -17,6 +17,8 @@ export interface Flow {
   inEnd: number; outEnd: number; savedEnd: number
   ins: Record<InGroup, number>; outs: Record<OutGroup, number>
   payEstimated: number   // paydays so far without the real amount entered
+  unmarked: number       // bills/cards/Afterpay due so far, counted but not marked paid
+  noAmount: string[]     // bills due with no amount set (can't be counted)
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -63,13 +65,26 @@ export function cashFlow(m: MoneyData, from: string, to: string, today: string, 
     else if (x.from_account_id && savingsIds.has(x.from_account_id) && x.to_account_id && checking.has(x.to_account_id)) saved -= x.amount
   }
   for (const d of m.deposits) if (inRange(d.saved_on)) saved += d.amount
-  // auto-pay that comes out of a bank by itself (subscriptions, payday bills, DECU transfer), through today
+  // Due so far: auto-pay comes out by itself (subscriptions, payday bills, DECU transfer); bills, card minimums
+  // and Afterpay/Affirm count on their due day even if not marked paid yet (once marked, the payment counts instead)
+  let unmarked = 0
+  const noAmount = new Set<string>()
   for (let k = from; k <= through; k = addDays(k, 1)) {
     for (const o of obligationsOn(m, k, today)) {
-      if (o.kind !== 'sub' || !o.amount || !o.fromAccountId || !checking.has(o.fromAccountId)) continue
-      if (o.key.startsWith('save:')) saved += o.amount
-      else if (o.key.startsWith('bill:')) outs.Bills += o.amount
-      else outs.Subscriptions += o.amount
+      if (o.kind === 'sub') {
+        if (!o.amount || !o.fromAccountId || !checking.has(o.fromAccountId)) continue
+        if (o.key.startsWith('save:')) saved += o.amount
+        else if (o.key.startsWith('bill:')) outs.Bills += o.amount
+        else outs.Subscriptions += o.amount
+        continue
+      }
+      if (o.status === 'paid' || o.payment) continue
+      if (o.kind === 'afterpay' && planOnCard(o.sourceId)) continue
+      if (!o.amount) { if (o.kind === 'bill') noAmount.add(o.name); continue }
+      unmarked += o.amount
+      if (o.kind === 'card') outs.Cards += o.amount
+      else if (o.kind === 'bill') outs.Bills += o.amount
+      else outs['Afterpay & Affirm'] += o.amount
     }
   }
   const inSoFar = r2(IN_GROUPS.reduce((t, g) => t + ins[g], 0))
@@ -92,15 +107,11 @@ export function cashFlow(m: MoneyData, from: string, to: string, today: string, 
     const step = savingsOn(m, k)
     if (step && !step.deposit) savedLater += step.amount
   }
-  // unpaid bills from earlier in the period are still going to go out
-  for (let k = from; k <= through; k = addDays(k, 1)) {
-    for (const o of obligationsOn(m, k, today)) if (o.kind !== 'sub' && o.amount && o.status !== 'paid' && !(o.kind === 'afterpay' && planOnCard(o.sourceId))) outLater += o.amount
-  }
   for (const g of IN_GROUPS) ins[g] = r2(ins[g])
   for (const g of OUT_GROUPS) outs[g] = r2(outs[g])
   return {
     label, from, to, through, inSoFar, outSoFar, savedSoFar,
-    inEnd: r2(inSoFar + inLater), outEnd: r2(outSoFar + outLater), savedEnd: r2(savedSoFar + savedLater), ins, outs, payEstimated,
+    inEnd: r2(inSoFar + inLater), outEnd: r2(outSoFar + outLater), savedEnd: r2(savedSoFar + savedLater), ins, outs, payEstimated, unmarked: r2(unmarked), noAmount: [...noAmount],
   }
 }
 

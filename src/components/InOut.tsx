@@ -72,6 +72,8 @@ function FlowBody({ f, offset, setOffset, open, setOpen, show, today }: {
           {IN_GROUPS.filter((g) => f.ins[g]).map((g) => <Line key={g} label={g === 'Paychecks' && f.payEstimated ? 'Paychecks (usual amount)' : g} v={show(f.ins[g])} />)}
           <span className="text-xs font-bold uppercase tracking-wider text-muted col-span-2 mt-1">Out</span>
           {OUT_GROUPS.filter((g) => f.outs[g]).map((g) => <Line key={g} label={g} v={show(f.outs[g])} />)}
+          {f.unmarked > 0 && <p className="col-span-2 m-0 mt-1 text-xs text-muted">Includes {show(f.unmarked)} due but not marked paid yet. Bills count on their due day; mark them paid and the real amount is used.</p>}
+          {f.noAmount.length > 0 && <p className="col-span-2 m-0 mt-1 text-xs font-bold text-warn">No amount set, so not counted: {f.noAmount.join(', ')}. Add the amount on Bills.</p>}
           {f.payEstimated > 0 && <p className="col-span-2 m-0 mt-1 text-xs text-muted">Tap a payday on the calendar and "Enter real amount" to use what actually landed.</p>}
           <p className="col-span-2 m-0 mt-1 text-xs text-muted">Only money that left NFCU or SoFi. Card purchases count when you pay the card. Cash = cash you took out.</p>
         </div>
