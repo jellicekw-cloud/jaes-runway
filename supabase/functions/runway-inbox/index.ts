@@ -1461,6 +1461,7 @@ async function unpaidDue(db: SupabaseClient, owner: string, days: string[]): Pro
         if (!paid.some((p) => p.bill_id === b.id && p.due_date === k)) out.push({ name: b.name, amount: b.amount === null ? null : Number(b.amount), date: k })
         continue
       }
+      if (b.autopay) continue   // drafts by itself: nothing to remind
       if (k >= b.tracking_since && dueOn(b.due_day, k) && !paid.some((p) => p.bill_id === b.id && p.due_date === k)) out.push({ name: b.name, amount: b.amount === null ? null : Number(b.amount), date: k })
     }
     type Plan = { id: string; name: string; total: number; order_date: string; installments: number; interval_days: number; provider?: string; interval_months?: number | null; payment_amount?: number | null; refunded?: number | null }
