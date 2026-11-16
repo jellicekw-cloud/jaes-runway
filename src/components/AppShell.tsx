@@ -7,6 +7,7 @@ import JournalSearch from './JournalSearch'
 import WeekView from './WeekView'
 import BillsView from './BillsView'
 import MoneyView from './MoneyView'
+import BudgetView from './Budget'
 import LogPurchase, { type AddMode } from './LogPurchase'
 import { AnytimeTodos, DayPlans } from './Plans'
 import { EMPTY_PLANS, loadPlans, type Plans } from '../lib/plans'
@@ -25,8 +26,8 @@ import AffordCheck from './AffordCheck'
 import { PaydownCard } from './Paydown'
 import { MilestoneBanner, RecapCard, StatementNudge } from './Progress'
 
-type Tab = 'week' | 'bills' | 'money' | 'trips'
-const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', trips: 'Trips' }
+type Tab = 'week' | 'bills' | 'money' | 'budget' | 'trips'
+const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', budget: 'Budget', trips: 'Trips' }
 
 /** Header, tabs and the money data every screen shares. */
 export default function AppShell({ email, userId }: { email: string; userId: string }) {
@@ -286,7 +287,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         <div className="text-2xl font-bold">Jae's Runway</div>
 
         <div role="tablist" aria-label="Screens" className="inline-flex gap-1 rounded-xl bg-header-2 p-1">
-          {(['week', 'bills', 'money', 'trips'] as Tab[]).map((t) => (
+          {(['week', 'bills', 'money', 'budget', 'trips'] as Tab[]).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => { setTab(t); if (t === 'trips') setOpenTripId(null) }}
               className={`h-9 px-4 rounded-lg border-0 font-bold cursor-pointer ${tab === t ? 'bg-accent-hi text-white' : 'bg-transparent text-header-muted hover:text-white'}`}>
               {TAB_LABEL[t]}
@@ -374,7 +375,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       )}
       {tab === 'bills' && <BillsView tripCosts={tripCosts} today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}
-      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} afford={<><AffordCheck m={moneyData} today={today} tripCosts={tripCosts} /><RecapCard m={moneyData} today={today} /></>} />}
+      {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} onOpenBudget={() => setTab('budget')} afford={<><AffordCheck m={moneyData} today={today} tripCosts={tripCosts} /><RecapCard m={moneyData} today={today} /></>} />}
+      {tab === 'budget' && <BudgetView m={moneyData} today={today} loaded={moneyLoaded} reloadMoney={reloadMoney} />}
 
       {shared}
     </div>

@@ -56,8 +56,8 @@ export const EMPTY_MONEY: MoneyData = {
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 const round2 = (n: number) => Math.round(n * 100) / 100
 
-/** How far back the spending log and balance estimates look. */
-const HISTORY_DAYS = 120
+/** How far back the spending log and balance estimates look (a year+, for the Budget's year view). */
+const HISTORY_DAYS = 400
 
 export async function loadMoney(today: string): Promise<MoneyData> {
   const since = addDays(today, -HISTORY_DAYS)

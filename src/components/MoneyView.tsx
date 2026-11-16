@@ -9,6 +9,7 @@ import { MoneyInSection } from './MoneyIn'
 import { SavingsSection } from './Savings'
 import { WalletCard } from './Wallet'
 import { InOutCard } from './InOut'
+import { BudgetCard } from './Budget'
 
 interface Props {
   today: string
@@ -18,10 +19,11 @@ interface Props {
   onLog: () => void
   onMoneyIn?: () => void
   afford?: ReactNode
+  onOpenBudget?: () => void
 }
 
 /** Money tab: checking balances, savings challenge, paycheck split, spending log. */
-export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog, onMoneyIn, afford }: Props) {
+export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog, onMoneyIn, afford, onOpenBudget }: Props) {
   const [error, setError] = useState('')
 
   async function run(change: () => Promise<unknown>) {
@@ -75,6 +77,8 @@ export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog,
       </section>
 
       <InOutCard m={m} today={today} hide={hide} />
+
+      <BudgetCard m={m} today={today} hide={hide} onOpen={onOpenBudget} />
 
       <WalletCard m={m} today={today} hide={hide} reloadMoney={reloadMoney} />
 
