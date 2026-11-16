@@ -3,7 +3,9 @@ import { addDays, daysBetween } from './dates'
 import { addTransfer, estimateBalance, isPayday, nextPayday, type MoneyData } from './money'
 import type { Account } from './types'
 
-// The cash Wallet: cash you take out (a move from a bank, not spending), and recounts.
+// The cash Wallet: your allowance ($40 each payday, taken out with "Took out cash") adds to what's there,
+// so leftover cash rolls over: what's in the wallet is what you have to spend until payday.
+// Cash you take out is a move from a bank, not spending; recounts find what was spent.
 // A recount that finds less cash than expected logs the difference as "Cash spent" (category Cash),
 // so cash shows in your spending and the monthly recap. Never part of "Can I afford it?".
 
@@ -24,6 +26,7 @@ export interface WalletStatus {
   budget: number; spent: number; left: number
   weekBudget: number; weekSpent: number; week: 1 | 2
   start: string | null; payday: string | null
+  takenOut: number   // cash you took out of a bank since payday (your allowance)
 }
 
 export function walletStatus(m: MoneyData, today: string): WalletStatus | null {
@@ -44,6 +47,7 @@ export function walletStatus(m: MoneyData, today: string): WalletStatus | null {
     budget, spent, left: r2(Math.max(0, budget - spent)),
     weekBudget: r2(budget / weeks), weekSpent: spentSince(weekStart), week,
     start, payday: nextPayday(m, addDays(today, 1))?.date ?? null,
+    takenOut: start ? r2(m.transfers.filter((x) => x.to_account_id === wallet.id && x.from_account_id && x.from_account_id !== wallet.id && m.accounts.find((a) => a.id === x.from_account_id)?.kind === 'checking' && x.moved_on >= start && x.moved_on <= today).reduce((t, x) => t + x.amount, 0)) : 0,
   }
 }
 

@@ -3,7 +3,7 @@ import { DAYS, dateOf, money, shortDate } from '../lib/dates'
 import { deleteTransfer, parseMoney, type MoneyData } from '../lib/money'
 import { recountCash, stashBalance, stashCash, stashOf, stashSuggestion, useStash, walletStatus, withdrawCash } from '../lib/wallet'
 
-/** 💵 Wallet: cash on hand, the $40-per-payday cash budget, take out cash, count my cash. */
+/** 💵 Wallet: cash on hand = what you have to spend until payday; the $40 allowance adds on when you take it out. */
 export function WalletCard({ m, today, hide, reloadMoney, onToast }: { m: MoneyData; today: string; hide?: boolean; reloadMoney: () => Promise<void>; onToast?: (s: string) => void }) {
   const st = walletStatus(m, today)
   const [mode, setMode] = useState<null | 'out' | 'count' | 'used'>(null)
@@ -22,8 +22,7 @@ export function WalletCard({ m, today, hide, reloadMoney, onToast }: { m: MoneyD
   const skipKey = `runway-stash-skip-${st.wallet.balance_as_of}-${st.cash}`
   let skipped = false
   try { skipped = localStorage.getItem(skipKey) === '1' } catch { /* fine */ }
-  const pct = st.budget ? Math.min(100, (st.spent / st.budget) * 100) : 0
-  const over = st.spent > st.budget
+  const needAllowance = st.start !== null && st.takenOut < st.budget
   const moves = m.transfers.filter((x) => x.to_account_id === st.wallet.id || (x.from_account_id === st.wallet.id) || (stash && (x.from_account_id === stash.id || x.to_account_id === stash.id))).slice(0, 3)
   const show = (n: number | null) => (hide ? '••••' : n === null ? '—' : money(n))
   const payWhen = st.payday ? `${DAYS[dateOf(st.payday).getDay()].slice(0, 3)} ${shortDate(st.payday)}` : 'payday'
@@ -50,17 +49,21 @@ export function WalletCard({ m, today, hide, reloadMoney, onToast }: { m: MoneyD
         <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-muted">💵 Wallet</h2>
         <b className="text-2xl tnum">{st.counted ? show(st.cash) : 'Count it once'}</b>
       </div>
-      <div className="flex flex-col gap-1">
-        <span className="h-2.5 rounded-full bg-pay-soft overflow-hidden">
-          <span className={`block h-full rounded-full ${over ? 'bg-bad' : 'bg-pay'}`} style={{ width: `${pct}%`, minWidth: st.spent ? 6 : 0 }} />
-        </span>
-        <span className="text-sm">
-          {over
-            ? <b className="text-bad">{money(st.spent - st.budget)} over your {money(st.budget)} cash until {payWhen}</b>
-            : <><b className="text-pay-ink">{money(st.left)} of {money(st.budget)} left</b> <span className="text-muted">until {payWhen}</span></>}
-        </span>
-        <span className="text-xs text-muted">This week {money(st.weekSpent)} of {money(st.weekBudget)} · spending comes from your recounts</span>
+      <div className="flex flex-col gap-0.5">
+        {st.counted && st.cash !== null && (
+          <span className="text-sm"><b className="text-pay-ink">{show(st.cash)} to spend</b> <span className="text-muted">until {payWhen}</span></span>
+        )}
+        {st.counted && st.cash !== null && st.payday && (
+          <span className="text-xs text-muted">+{money(st.budget)} allowance on {payWhen} → {show(st.cash + st.budget)} if you don't spend more</span>
+        )}
+        {st.start && <span className="text-xs text-muted">Spent {show(st.spent)} since payday ({shortDate(st.start)}) · from your recounts</span>}
       </div>
+      {needAllowance && !mode && (
+        <button type="button" onClick={() => { setMode('out'); setAmt(String(st.budget - st.takenOut)) }}
+          className="rounded-xl border border-pay bg-pay-soft px-3 py-2 text-left text-sm text-fg cursor-pointer">
+          💵 Payday allowance: when you take out your {money(st.budget - st.takenOut)}, tap here to add it.
+        </button>
+      )}
 
       {stash && (
         <div className="flex flex-col gap-1 rounded-xl bg-surface-2 px-3 py-2" data-testid="stash">
