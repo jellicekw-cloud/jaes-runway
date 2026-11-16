@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { addDays, dateOf, DAYS, money, shortDate } from '../lib/dates'
 import {
-  addTransfer, autoTransferOn, deleteTransfer, estimateBalance, nextPayday, parseMoney, paycheckContribution, setAccountBalance, setAutoTransfer, type MoneyData,
+  addTransfer, autoTransferOn, currentSavingsStep, deleteTransfer, planRoute, estimateBalance, nextPayday, parseMoney, paycheckContribution, setAccountBalance, setAutoTransfer, type MoneyData,
 } from '../lib/money'
 import type { Account } from '../lib/types'
 import { Burst } from './Confetti'
@@ -48,8 +48,11 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
   const checking = m.accounts.filter((x) => x.kind === 'checking')
   const isVault = a.kind === 'vault'
   const isInvest = a.kind === 'invest'
+  const plan = m.challenges.find((c) => c.to_account_id === a.id)   // a 52-week plan you move yourself
+  const planNext = plan ? currentSavingsStep(m, plan) : undefined
+  const manual = isVault || Boolean(plan)
   const sofi = checking.find((x) => x.institution === 'SoFi')?.id
-  const defaultOther = (isVault ? (m.challenge?.from_account_id ?? sofi) : a.auto_from_account_id) ?? checking[0]?.id ?? ''
+  const defaultOther = (plan ? plan.from_account_id : isVault ? sofi : a.auto_from_account_id) ?? checking[0]?.id ?? ''
   const moves = m.transfers.filter((x) => x.to_account_id === a.id || x.from_account_id === a.id).slice(0, 3)
   const next = nextAuto(a, today)
   const from = m.accounts.find((x) => x.id === a.auto_from_account_id)
@@ -60,7 +63,7 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0" data-testid={`savings-${a.institution ?? a.name}`}>
       <div className="flex items-baseline justify-between gap-2">
         <b className="text-lg">{a.name}</b>
-        <span className="text-xs text-muted">{isVault ? 'Savings challenge + extra' : isInvest ? 'Tracking only · not counted anywhere' : a.role_note}</span>
+        <span className="text-xs text-muted">{isVault ? 'Savings challenge + extra' : isInvest ? 'Tracking only · not counted anywhere' : plan ? '52-week plan · you move it yourself' : a.role_note}</span>
       </div>
       <div className="text-3xl font-bold tnum text-pay-ink">{show(bal)}</div>
 
@@ -88,8 +91,18 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
       {/* Out of each paycheck (Fidelity) */}
       {isInvest && <PaycheckAmount a={a} m={m} today={today} run={run} />}
 
+      {/* A 52-week plan you move yourself (NFCU Savings) */}
+      {plan && !isVault && (
+        <div className="flex items-center gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-sm">
+          <span aria-hidden="true">✋</span>
+          <span className="flex-1 min-w-0">
+            {planNext ? <>Next: move <b>{money(planNext.amount)}</b> from {planRoute(m, plan).from} {planNext.date > today ? `on ${DAYS[dateOf(planNext.date).getDay()].slice(0, 3)} ${shortDate(planNext.date)}` : 'now'}, then tap Saved it</> : <>52-week plan done 🎉</>}
+          </span>
+        </div>
+      )}
+
       {/* Automatic transfer (DECU) */}
-      {!isVault && !isInvest && (
+      {!manual && !isInvest && (
         editAuto || !a.auto_amount ? (
           <AutoForm a={a} today={today} run={run} onDone={() => setEditAuto(false)} fromName={from?.institution ?? from?.name ?? 'NFCU'} />
         ) : (
@@ -130,7 +143,7 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
           })}
         </ul>
       )}
-      {lastOut && !isVault && !isInvest && <p className="m-0 text-xs text-muted">That's what it's there for. The auto transfer keeps building it back. 💚</p>}
+      {lastOut && !manual && !isInvest && <p className="m-0 text-xs text-muted">That's what it's there for. The auto transfer keeps building it back. 💚</p>}
     </div>
   )
 }
