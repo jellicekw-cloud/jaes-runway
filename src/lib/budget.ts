@@ -160,11 +160,11 @@ const r2 = (n: number) => Math.round(n * 100) / 100
 const has = (re: RegExp, s: string) => re.test(s.toLowerCase())
 
 function billCat(name: string): BudgetCat {
+  if (has(/netflix|hulu|disney|peacock|\bmax\b|paramount|spotify|youtube|streaming|mgm|\bprime\b|apple ?tv|starz|showtime|britbox|crunchyroll|sling|fubo|philo|bet\+|amc\+|discovery\+/, name)) return 'Streaming Services'
   if (has(/\bkia\b|car note|\bcar\b|auto|\broot\b|toll|vehicle|tesla|charging/, name)) return 'Transportation'
   if (has(/\blife\b|aarp/, name)) return 'Life Insurance'
   if (has(/power|electric|\bwater\b|sewer|\bgas\b|trash|utilit|\bemc\b|sanitation/, name)) return 'Utilities'
   if (has(/mortgage|\bhoa\b|ring|alarm|at&t|\batt\b|fiber|internet|rent|pest|lawn|hvac|home/, name)) return 'House'
-  if (has(/netflix|hulu|disney|peacock|max\b|paramount|spotify|youtube|streaming/, name)) return 'Streaming Services'
   return 'Miscellaneous Expenses'
 }
 
