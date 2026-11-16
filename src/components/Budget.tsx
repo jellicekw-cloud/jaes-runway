@@ -332,7 +332,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
   const [editing, setEditing] = useState<string | null>(null)
   const [val, setVal] = useState('')
   const show = (n: number | null) => (n === null ? '—' : hide ? '••••' : money(n))
-  const counted = accts.filter((a) => a.kind !== 'invest').reduce((t, a) => t + (estimateBalance(m, a, today).estimate ?? 0), 0)
+  const counted = accts.reduce((t, a) => t + (estimateBalance(m, a, today).estimate ?? 0), 0)
   return (
     <div className="rounded-2xl border border-line bg-surface overflow-hidden" data-testid="panel-savings">
       <div className="py-2.5 text-center font-extrabold text-white" style={{ background: '#0F766E' }}>Savings</div>
@@ -345,7 +345,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
           return (
             <div key={a.id} className="py-1.5 border-b border-line last:border-b-0 flex flex-col gap-1">
               <div className="flex items-center gap-2">
-                <span className="flex-1">{a.kind === 'invest' ? `${a.name} (tracking only)` : a.kind === 'vault' ? 'SoFi Vault · 52-week plan' : a.kind === 'stash' ? 'Emergency stash' : `${a.name}${plan ? ' · 52-week plan' : ''}`}</span>
+                <span className="flex-1">{a.kind === 'invest' ? a.name : a.kind === 'vault' ? 'SoFi Vault · 52-week plan' : a.kind === 'stash' ? 'Emergency stash' : `${a.name}${plan ? ' · 52-week plan' : ''}`}</span>
                 {a.kind === 'invest' && editing !== a.id && (
                   <button type="button" onClick={() => { setEditing(a.id); setVal(a.balance === null ? '' : String(a.balance)) }} className="bg-transparent border-0 p-0 text-accent text-xs font-bold cursor-pointer">
                     {a.balance === null ? 'Add balance' : 'Update'}
@@ -357,7 +357,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
                     <button type="submit" className="h-8 px-2 rounded-lg border-0 bg-accent text-accent-ink text-xs font-bold cursor-pointer">Save</button>
                     <button type="button" onClick={() => setEditing(null)} className="h-8 px-1 bg-transparent border-0 text-muted text-xs cursor-pointer">Cancel</button>
                   </form>
-                ) : <b className={`tnum ${a.kind === 'invest' ? 'text-muted' : ''}`}>{show(est)}</b>}
+                ) : <b className="tnum">{show(est)}</b>}
               </div>
               {a.kind === 'invest' && paycheckContribution(a) && (
                 <span className="text-xs text-muted">+{money(a.auto_amount).replace('.00', '')} from each paycheck (before it reaches the bank)</span>
@@ -378,7 +378,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
           )
         })}
         <div className="flex justify-between pt-2.5 font-bold"><span>Total saved</span><span className="tnum" style={{ color: '#0F766E' }}>{hide ? '••••' : money(counted)}</span></div>
-        <span className="text-xs text-muted">Fidelity isn't counted in the total, Can I afford it? or anywhere else.</span>
+        <span className="text-xs text-muted">Savings (Fidelity included) never count in Can I afford it?</span>
       </div>
     </div>
   )

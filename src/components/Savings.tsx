@@ -17,16 +17,24 @@ export function nextAuto(a: Account, today: string): string | null {
   return null
 }
 
-/** Money tab: DECU savings, the SoFi Vault and Fidelity (tracking only). Never counted in "Can I afford it?". */
+/** Money tab: DECU, NFCU Savings, the SoFi Vault and Fidelity, with your total saved. Never counted in "Can I afford it?". */
 export function SavingsSection({ m, today, hide, run }: { m: MoneyData; today: string; hide: boolean; run: Run }) {
   const list = m.accounts.filter((a) => a.kind === 'savings' || a.kind === 'vault' || a.kind === 'invest')
   if (!list.length) return null
+  // Everything you've saved: these, plus the emergency stash
+  const all = m.accounts.filter((a) => ['savings', 'vault', 'stash', 'invest'].includes(a.kind))
+  const ests = all.map((a) => estimateBalance(m, a, today).estimate)
+  const total = ests.reduce<number>((t, e) => t + (e ?? 0), 0)
+  const missing = all.filter((_, i) => ests[i] === null).map((a) => a.name)
   return (
     <section aria-label="Savings" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="m-0 text-2xl font-bold">Savings</h2>
-        <span className="text-sm text-muted">Not counted in "Can I afford it?"</span>
+        <span className="text-sm text-muted" data-testid="total-saved">
+          Total saved <b className="text-pay-ink tnum text-base">{hide ? '••••' : money(total)}</b> · not counted in "Can I afford it?"
+        </span>
       </div>
+      {missing.length > 0 && <p className="m-0 -mt-2 text-xs text-muted">Enter a balance for {missing.join(', ')} to include it.</p>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {list.map((a) => <SavingsCard key={a.id} a={a} m={m} today={today} hide={hide} run={run} />)}
       </div>
@@ -63,7 +71,7 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0" data-testid={`savings-${a.institution ?? a.name}`}>
       <div className="flex items-baseline justify-between gap-2">
         <b className="text-lg">{a.name}</b>
-        <span className="text-xs text-muted">{isVault ? 'Savings challenge + extra' : isInvest ? 'Tracking only · not counted anywhere' : plan ? '52-week plan · you move it yourself' : a.role_note}</span>
+        <span className="text-xs text-muted">{isVault ? 'Savings challenge + extra' : isInvest ? 'Saving · straight from your paycheck' : plan ? '52-week plan · you move it yourself' : a.role_note}</span>
       </div>
       <div className="text-3xl font-bold tnum text-pay-ink">{show(bal)}</div>
 
