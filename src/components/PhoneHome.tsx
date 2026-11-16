@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { DAYS, addDays, dateOf, money, shortDate } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
 import {
-  challengeGoal, challengeSteps, hasMoneyIn, currentSavingsStep, estimateBalance, isPayday, nextPayday, obligationsOn, saveDeposit, savingsOn,
+  challengeGoal, challengeSteps, hasMoneyIn, currentSavingsStep, estimateBalance, isPayday, nextPayday, obligationsOn, planRoute, saveDeposit, savingsAllOn,
   setHideBalances, type MoneyData,
 } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
@@ -58,9 +58,6 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
   const ests = checking.map((a) => estimateBalance(m, a, today))
   const total = ests.every((e) => e.estimate === null) ? null : ests.reduce((t, e) => t + (e.estimate ?? 0), 0)
   const np = nextPayday(m, today)
-  const step = currentSavingsStep(m)
-  const saved = challengeSteps(m).reduce((t, s) => t + (s.deposit ? s.amount : 0), 0)
-  const goal = challengeGoal(m)
   const label = (i: number) => (i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : DAYS[dateOf(days[i]).getDay()])
 
   // Home's 3-day list shows plans without the per-day add box (the + button and To-do card cover adding)
@@ -101,35 +98,44 @@ export default function PhoneHome({ userId, today, money: m, moneyLoaded, reload
 
       {afford}
 
-      {/* Savings */}
-      {m.challenge && (
-        <section aria-label="Savings challenge" className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-2.5">
-          <div className="flex items-center justify-between">
-            <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-muted">Savings challenge</h2>
-            <span className="text-sm font-bold text-pay-ink tnum">{hide ? '••••' : money(saved)} of {money(goal)}</span>
-          </div>
-          <span className="h-2.5 rounded-full bg-pay-soft overflow-hidden">
-            <span className="block h-full rounded-full bg-pay" style={{ width: `${Math.min((saved / goal) * 100, 100)}%`, minWidth: saved ? 6 : 0 }} />
-          </span>
-          {step ? (
-            <div className="flex items-center gap-3">
-              <span className="flex-1 min-w-0">
-                <b className="block">Deposit {step.no} of {m.challenge.deposit_count}</b>
-                <span className="text-sm text-muted">Move {money(step.amount)} SoFi → Vault {step.date > today ? `on ${shortDate(step.date)}` : 'this payday'}</span>
-              </span>
-              <button type="button" onClick={() => void saveDeposit(m, step, today).then(reloadMoney)}
-                className="h-11 px-4 rounded-xl border-0 bg-pay text-white font-bold cursor-pointer">Saved it</button>
+      {/* Savings: one card per 52-week plan */}
+      {m.challenges.map((ch) => {
+        const steps = challengeSteps(m, ch)
+        const step = currentSavingsStep(m, ch)
+        const saved = steps.reduce((t, s) => t + (s.deposit ? s.amount : 0), 0)
+        const goal = challengeGoal(m, ch)
+        const r = planRoute(m, ch)
+        return (
+          <section key={ch.id} aria-label={ch.name} className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-muted truncate">{ch.name}</h2>
+              <span className="text-sm font-bold text-pay-ink tnum shrink-0">{hide ? '••••' : money(saved)} of {money(goal)}</span>
             </div>
-          ) : <b className="text-pay-ink">All deposits saved 🎉</b>}
-        </section>
-      )}
+            <span className="h-2.5 rounded-full bg-pay-soft overflow-hidden">
+              <span className="block h-full rounded-full bg-pay" style={{ width: `${Math.min((saved / goal) * 100, 100)}%`, minWidth: saved ? 6 : 0 }} />
+            </span>
+            {step ? (
+              <div className="flex items-center gap-3">
+                <span className="flex-1 min-w-0">
+                  <b className="block">Deposit {step.no} of {ch.deposit_count}</b>
+                  <span className="text-sm text-muted">Move {money(step.amount)} {r.from} → {r.to.replace('your ', '')} {step.date > today ? `on ${shortDate(step.date)}` : 'this payday'}</span>
+                </span>
+                {step.date <= today && (
+                  <button type="button" onClick={() => void saveDeposit(m, step, today).then(reloadMoney)}
+                    className="h-11 px-4 rounded-xl border-0 bg-pay text-white font-bold cursor-pointer">Saved it</button>
+                )}
+              </div>
+            ) : <b className="text-pay-ink">All deposits saved 🎉</b>}
+          </section>
+        )
+      })}
 
       {/* Next 3 days */}
       <section aria-label="Next 3 days" className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-3">
         <h2 className="m-0 text-xs font-bold tracking-widest uppercase text-muted">Next 3 days</h2>
         {days.map((k, i) => {
           const d = dateOf(k)
-          const busy = isPayday(m, k) || hasMoneyIn(m, k, today) || Boolean(savingsOn(m, k)) || obligationsOn(m, k, today).length > 0
+          const busy = isPayday(m, k) || hasMoneyIn(m, k, today) || savingsAllOn(m, k).length > 0 || obligationsOn(m, k, today).length > 0
           const hasPlans = eventsOn(plans, k).length > 0 || todosOn(plans, k, today).length > 0 || itemsOn(trips, k).length > 0 || tripsOn(trips, k).length > 0 || (k !== today && packagesOn(orders, k, today).length > 0) || datesOn(dates, k).length > 0
           return (
             <div key={k} className="grid grid-cols-[48px_minmax(0,1fr)] gap-2.5">

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { daysBetween, money, shortDate } from '../lib/dates'
 import {
-  clearPayActual, hasPayActual, hasMoneyIn, isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, payInto, payTotalOn, savePayActual, saveDeposit, savingsOn, undoDeposit, undoPayment, type MoneyData, type Obligation,
+  clearPayActual, hasPayActual, hasMoneyIn, isPayday, markPaid, obligationsOn, parseMoney, paycheckTotal, payInto, payTotalOn, savePayActual, saveDeposit, savingsAllOn, planRoute, undoDeposit, undoPayment, type MoneyData, type Obligation, type SavingsStep,
 } from '../lib/money'
 import { DayMoneyIn } from './MoneyIn'
 
@@ -18,7 +18,8 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
   const bills = items.filter((o) => o.kind !== 'sub')
   const subs = items.filter((o) => o.kind === 'sub')
   const pay = isPayday(m, date)
-  const save = savingsOn(m, date)
+  const saves = savingsAllOn(m, date)
+  const save = saves.length > 0
 
   const moneyIn = hasMoneyIn(m, date, today)
   if (!pay && !save && !moneyIn && items.length === 0) return null
@@ -29,7 +30,7 @@ export default function DayBills({ date, today, money: m, reloadMoney }: Props) 
 
       {moneyIn && <DayMoneyIn date={date} today={today} money={m} reloadMoney={reloadMoney} />}
 
-      {save && <SavingsRow date={date} today={today} money={m} reloadMoney={reloadMoney} />}
+      {saves.map((s) => <SavingsRow key={s.ch.id} step={s} today={today} money={m} reloadMoney={reloadMoney} />)}
 
       {bills.length > 0 && <span className="text-xs font-bold tracking-widest uppercase text-muted">Bills due</span>}
       {bills.map((o) => <BillRow key={o.key} o={o} today={today} money={m} reloadMoney={reloadMoney} />)}
@@ -127,11 +128,10 @@ function BillRow({ o, today, money: m, reloadMoney }: { o: Obligation; today: st
   )
 }
 
-function SavingsRow({ date, today, money: m, reloadMoney }: { date: string; today: string; money: MoneyData; reloadMoney: () => Promise<void> }) {
+function SavingsRow({ step, today, money: m, reloadMoney }: { step: SavingsStep; today: string; money: MoneyData; reloadMoney: () => Promise<void> }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const step = savingsOn(m, date)
-  if (!step || !m.challenge) return null
+  const r = planRoute(m, step.ch)
   const done = Boolean(step.deposit)
 
   async function toggle() {
@@ -146,8 +146,8 @@ function SavingsRow({ date, today, money: m, reloadMoney }: { date: string; toda
       <div className="flex items-center gap-2.5">
         <span className="size-3 rounded-full shrink-0 bg-pay" />
         <span className="flex-1 min-w-0">
-          <b className="block">Savings challenge · {step.no} of {m.challenge.deposit_count}</b>
-          <span className="block text-sm text-muted">{done ? `Saved ${money(step.amount)} to your SoFi Vault` : `Move ${money(step.amount)} from SoFi to your Vault`}</span>
+          <b className="block">{step.ch.name} · {step.no} of {step.ch.deposit_count}</b>
+          <span className="block text-sm text-muted">{done ? `Saved ${money(step.amount)} to ${r.to}` : `Move ${money(step.amount)} from ${r.from} to ${r.to}`}</span>
         </span>
         <button type="button" onClick={() => void toggle()} disabled={busy}
           className={`h-10 px-4 rounded-lg font-bold cursor-pointer disabled:opacity-60 ${done ? 'border border-line bg-surface text-fg' : 'border-0 bg-pay text-white'}`}>

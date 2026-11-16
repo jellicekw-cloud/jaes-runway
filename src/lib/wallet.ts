@@ -109,7 +109,7 @@ export function stashSuggestion(m: MoneyData, today: string): StashIdea | null {
   const goal = stash.goal_amount ?? 250
   const have = stashBalance(m, today)
   if (have < goal) return amount >= 1 ? { amount: Math.min(amount, Math.floor(goal - have)), to: stash, toStash: true, cash: st.cash } : null
-  const decu = m.accounts.find((a) => a.kind === 'savings')
+  const decu = m.accounts.find((a) => a.kind === 'savings' && a.institution === 'DECU') ?? m.accounts.find((a) => a.kind === 'savings')
   if (!decu) return null
   amount = Math.max(0, amount)
   return amount >= 1 ? { amount, to: decu, toStash: false, cash: st.cash } : null

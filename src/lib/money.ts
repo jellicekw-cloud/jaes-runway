@@ -17,7 +17,8 @@ export interface MoneyData {
   subs: Subscription[]
   orders: AfterpayOrder[]
   payments: Payment[]
-  challenge: SavingsChallenge | null
+  challenge: SavingsChallenge | null          // the first plan (SoFi Vault, going down)
+  challenges: SavingsChallenge[]              // every active plan (SoFi Vault, NFCU savings going up …)
   deposits: SavingsDeposit[]
   transactions: Transaction[]
   income: Income[]
@@ -50,7 +51,7 @@ export interface IncomeSource { id: string; name: string; account_id: string | n
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [], transfers: [], payActuals: [],
+  challenge: null, challenges: [], deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [], transfers: [], payActuals: [],
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
@@ -70,7 +71,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     supabase.from('subscriptions').select('*').eq('is_active', true).order('charge_day'),
     supabase.from('afterpay_orders').select('*').order('order_date', { ascending: false }),
     supabase.from('payments').select('id, card_id, bill_id, afterpay_order_id, installment_no, due_date, amount, paid_on, account_id, created_at').order('due_date', { ascending: false }),
-    supabase.from('savings_challenges').select('*').eq('is_active', true).order('created_at').limit(1),
+    supabase.from('savings_challenges').select('*').eq('is_active', true).order('created_at'),
     supabase.from('savings_deposits').select('id, challenge_id, deposit_no, amount, saved_on, created_at').order('deposit_no'),
     supabase.from('transactions').select('*').gte('occurred_on', since).order('occurred_on', { ascending: false }).order('created_at', { ascending: false }),
   ])
@@ -86,7 +87,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     supabase.from('transfers').select('id, from_account_id, to_account_id, amount, moved_on, note, created_at').gte('moved_on', since).order('moved_on', { ascending: false }),   // from 11_savings.sql
     supabase.from('paycheck_actuals').select('id, pay_date, account_id, amount').gte('pay_date', addDays(today, -400)),   // from 19_paychecks.sql
   ])
-  const ch = ((challenges.data ?? []) as SavingsChallenge[])[0]
+  const chs = ((challenges.data ?? []) as SavingsChallenge[]).map((c) => ({ ...c, first_amount: Number(c.first_amount), step_amount: Number(c.step_amount) }))
   return {
     settings: settings.data as Settings | null,
     accounts: ((accounts.data ?? []) as Account[]).map((a) => ({ ...a, balance: num(a.balance), auto_amount: num(a.auto_amount), goal_amount: num(a.goal_amount), auto_every_days: a.auto_every_days ?? 14 })),
@@ -96,7 +97,8 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     subs: ((subs.data ?? []) as Subscription[]).map((s) => ({ ...s, amount: Number(s.amount) })),
     orders: ((orders.data ?? []) as AfterpayOrder[]).map((o) => ({ ...o, total: Number(o.total), refunded: Number(o.refunded ?? 0), payment_amount: num(o.payment_amount), provider: o.provider ?? 'afterpay' })),
     payments: ((payments.data ?? []) as Payment[]).map((p) => ({ ...p, amount: Number(p.amount) })),
-    challenge: ch ? { ...ch, first_amount: Number(ch.first_amount), step_amount: Number(ch.step_amount) } : null,
+    challenge: chs[0] ?? null,
+    challenges: chs,
     deposits: ((deposits.data ?? []) as SavingsDeposit[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     transactions: ((transactions.data ?? []) as Transaction[]).map((t) => ({ ...t, amount: Number(t.amount) })),
     income: inc.error ? [] : ((inc.data ?? []) as Income[]).map((x) => ({ ...x, amount: Number(x.amount) })),
@@ -348,18 +350,19 @@ export function overdue(d: MoneyData, today: string, lookbackDays = 90): Obligat
 // ---------------------------------------------------------------------------
 
 export interface SavingsStep {
+  ch: SavingsChallenge
   no: number
   date: string
   amount: number
   deposit?: SavingsDeposit
 }
 
-export function challengeSteps(d: MoneyData): SavingsStep[] {
-  const ch = d.challenge
+export function challengeSteps(d: MoneyData, ch: SavingsChallenge | null = d.challenge): SavingsStep[] {
   if (!ch) return []
   return Array.from({ length: ch.deposit_count }, (_, i) => {
     const no = i + 1
     return {
+      ch,
       no,
       date: addDays(ch.start_date, i * ch.every_days),
       amount: round2(ch.first_amount + ch.step_amount * i),
@@ -368,22 +371,45 @@ export function challengeSteps(d: MoneyData): SavingsStep[] {
   })
 }
 
-export function challengeGoal(d: MoneyData): number {
-  return round2(challengeSteps(d).reduce((t, s) => t + s.amount, 0))
+export function challengeGoal(d: MoneyData, ch: SavingsChallenge | null = d.challenge): number {
+  return round2(challengeSteps(d, ch).reduce((t, s) => t + s.amount, 0))
 }
 
+/** Every plan's deposits, all together. */
+export function allSavingsSteps(d: MoneyData): SavingsStep[] {
+  return d.challenges.flatMap((c) => challengeSteps(d, c))
+}
+
+/** The first plan's deposit on a day (kept for older screens). */
 export function savingsOn(d: MoneyData, date: string): SavingsStep | undefined {
   return challengeSteps(d).find((s) => s.date === date)
 }
 
+/** Every plan's deposit on a day. */
+export function savingsAllOn(d: MoneyData, date: string): SavingsStep[] {
+  return allSavingsSteps(d).filter((s) => s.date === date)
+}
+
 /** The deposit to show as "this payday": the first not yet saved. */
-export function currentSavingsStep(d: MoneyData): SavingsStep | undefined {
-  return challengeSteps(d).find((s) => !s.deposit)
+export function currentSavingsStep(d: MoneyData, ch: SavingsChallenge | null = d.challenge): SavingsStep | undefined {
+  return challengeSteps(d, ch).find((s) => !s.deposit)
+}
+
+/** "SoFi → Vault", "NFCU → NFCU Savings" */
+export function planRoute(d: MoneyData, ch: SavingsChallenge): { from: string; to: string } {
+  const name = (id: string | null) => {
+    const a = d.accounts.find((x) => x.id === id)
+    if (!a) return '?'
+    if (a.kind === 'vault') return 'your Vault'
+    if (a.kind === 'checking') return a.institution ?? a.name
+    return a.name
+  }
+  return { from: name(ch.from_account_id), to: name(ch.to_account_id) }
 }
 
 export async function saveDeposit(d: MoneyData, step: SavingsStep, today: string): Promise<void> {
-  if (!d.challenge) return
-  const { error } = await supabase.from('savings_deposits').insert({ challenge_id: d.challenge.id, deposit_no: step.no, amount: step.amount, saved_on: today })
+  void d
+  const { error } = await supabase.from('savings_deposits').insert({ challenge_id: step.ch.id, deposit_no: step.no, amount: step.amount, saved_on: today })
   if (error) throw error
 }
 
@@ -470,8 +496,7 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
   if (movedIn) changes.push({ label: 'Moved in', amount: round2(movedIn) })
   if (movedOut) changes.push({ label: 'Moved out', amount: -round2(movedOut) })
 
-  const ch = d.challenge
-  if (ch) {
+  for (const ch of d.challenges) {
     const moved = d.deposits.filter((x) => x.challenge_id === ch.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
     if (moved && ch.from_account_id === a.id) changes.push({ label: 'Savings challenge', amount: -moved })
     if (moved && ch.to_account_id === a.id) changes.push({ label: 'Savings challenge', amount: moved })

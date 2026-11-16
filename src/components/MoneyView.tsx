@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { DAYS, dateOf, money, shortDate, weekStart } from '../lib/dates'
 import {
-  challengeGoal, challengeSteps, currentSavingsStep, deleteTransaction, estimateBalance, nextPayday, parseMoney, paycheckTotal,
+  challengeGoal, challengeSteps, currentSavingsStep, planRoute, deleteTransaction, estimateBalance, nextPayday, parseMoney, paycheckTotal,
   saveDeposit, setAccountBalance, setHideBalances, setPaySplit, undoDeposit, updateTransaction, type MoneyData, type SavingsStep,
 } from '../lib/money'
-import { CATEGORIES, type Account, type Transaction } from '../lib/types'
+import { CATEGORIES, type Account, type SavingsChallenge, type Transaction } from '../lib/types'
 import { MoneyInSection } from './MoneyIn'
 import { SavingsSection } from './Savings'
 import { WalletCard } from './Wallet'
@@ -38,15 +38,9 @@ export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog,
   const hide = m.settings?.hide_balances ?? false
   const show = (n: number | null) => (hide ? '$ • • • •' : n === null ? '—' : money(n))
   const checking = m.accounts.filter((a) => a.kind === 'checking')
-  const vault = m.accounts.find((a) => a.kind === 'vault')
   const estimates = checking.map((a) => estimateBalance(m, a, today))
   const total = estimates.every((e) => e.estimate === null) ? null : estimates.reduce((t, e) => t + (e.estimate ?? 0), 0)
 
-  const steps = challengeSteps(m)
-  const goal = challengeGoal(m)
-  const saved = steps.reduce((t, s) => t + (s.deposit ? s.amount : 0), 0)
-  const current = currentSavingsStep(m)
-  const vaultEst = vault ? estimateBalance(m, vault, today).estimate : null
 
   const np = nextPayday(m, today)
   const wkStart = weekStart(today, 1)
@@ -84,39 +78,8 @@ export default function MoneyView({ today, money: m, loaded, reloadMoney, onLog,
 
       <SavingsSection m={m} today={today} hide={hide} run={run} />
 
-      {/* Savings challenge */}
-      {m.challenge && (
-        <Section title="Savings challenge" right={<span className="font-bold text-pay-ink tnum">{hide ? '••••' : money(saved)} of {money(goal)}</span>}>
-          <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4">
-            <span className="h-3 rounded-full bg-pay-soft overflow-hidden">
-              <span className="block h-full rounded-full bg-pay" style={{ width: `${Math.min((saved / goal) * 100, 100)}%`, minWidth: saved ? 6 : 0 }} />
-            </span>
-            {current ? (
-              <CurrentDeposit step={current} today={today} total={steps.length} m={m} run={run} />
-            ) : (
-              <p className="m-0 font-bold text-pay-ink">All {steps.length} deposits saved. You did it! 🎉</p>
-            )}
-            <p className="m-0 text-sm text-muted">
-              52-week challenge in reverse, two weeks per payday, from SoFi checking into your SoFi Vault.
-              {vault ? <> Vault: <b className="text-fg tnum">{hide ? '••••' : money(vaultEst)}</b>.</> : null} Tap a deposit to mark it saved or undo it.
-            </p>
-            <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-9 gap-1.5">
-              {steps.map((s) => {
-                const isCurrent = s.no === current?.no
-                return (
-                  <button key={s.no} type="button" aria-pressed={Boolean(s.deposit)}
-                    aria-label={`Deposit ${s.no}, ${shortDate(s.date)}, ${money(s.amount)}${s.deposit ? ', saved. Tap to undo' : ''}`}
-                    onClick={() => void run(() => (s.deposit ? undoDeposit(s) : saveDeposit(m, s, today)))}
-                    className={`h-14 rounded-xl flex flex-col items-center justify-center gap-0.5 cursor-pointer tnum ${s.deposit ? 'bg-pay text-white border border-pay' : isCurrent ? 'bg-surface border-2 border-accent-hi' : 'bg-surface-2 border border-line'}`}>
-                    <span className={`text-[11px] font-bold ${s.deposit ? 'text-white/85' : 'text-muted'}`}>{shortDate(s.date)}</span>
-                    <b className="text-sm">${s.amount}</b>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        </Section>
-      )}
+      {/* Savings challenges (52-week plans) */}
+      {m.challenges.map((ch) => <ChallengeSection key={ch.id} ch={ch} m={m} today={today} hide={hide} run={run} />)}
 
       {/* Paycheck */}
       <Section title="Paycheck" right={<span className="font-bold text-pay-ink tnum">{money(paycheckTotal(m))}</span>}>
@@ -224,7 +187,52 @@ function BalanceCard({ account: a, est, hide, run }: { account: Account; est: Re
   )
 }
 
+/** One 52-week plan: progress, this payday's deposit, and every deposit to tap. */
+function ChallengeSection({ ch, m, today, hide, run }: { ch: SavingsChallenge; m: MoneyData; today: string; hide: boolean; run: Run }) {
+  const steps = challengeSteps(m, ch)
+  const goal = challengeGoal(m, ch)
+  const saved = steps.reduce((t, s) => t + (s.deposit ? s.amount : 0), 0)
+  const current = currentSavingsStep(m, ch)
+  const to = m.accounts.find((a) => a.id === ch.to_account_id)
+  const toEst = to ? estimateBalance(m, to, today).estimate : null
+  const r = planRoute(m, ch)
+  const up = ch.step_amount > 0
+  return (
+    <Section title={ch.name} right={<span className="font-bold text-pay-ink tnum">{hide ? '••••' : money(saved)} of {money(goal)}</span>}>
+      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4" data-testid={`challenge-${to?.institution ?? ch.id}`}>
+        <span className="h-3 rounded-full bg-pay-soft overflow-hidden">
+          <span className="block h-full rounded-full bg-pay" style={{ width: `${Math.min((saved / goal) * 100, 100)}%`, minWidth: saved ? 6 : 0 }} />
+        </span>
+        {current ? (
+          <CurrentDeposit step={current} today={today} total={steps.length} m={m} run={run} />
+        ) : (
+          <p className="m-0 font-bold text-pay-ink">All {steps.length} deposits saved. You did it! 🎉</p>
+        )}
+        <p className="m-0 text-sm text-muted">
+          52-week challenge {up ? 'going up' : 'in reverse'}, two weeks per payday, from {r.from} into {r.to}. You move it yourself.
+          {to ? <> {to.kind === 'vault' ? 'Vault' : to.name}: <b className="text-fg tnum">{hide ? '••••' : money(toEst)}</b>.</> : null} Tap a deposit to mark it saved or undo it.
+        </p>
+        <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-9 gap-1.5">
+          {steps.map((s) => {
+            const isCurrent = s.no === current?.no
+            return (
+              <button key={s.no} type="button" aria-pressed={Boolean(s.deposit)}
+                aria-label={`${ch.name} deposit ${s.no}, ${shortDate(s.date)}, ${money(s.amount)}${s.deposit ? ', saved. Tap to undo' : ''}`}
+                onClick={() => void run(() => (s.deposit ? undoDeposit(s) : saveDeposit(m, s, today)))}
+                className={`h-14 rounded-xl flex flex-col items-center justify-center gap-0.5 cursor-pointer tnum ${s.deposit ? 'bg-pay text-white border border-pay' : isCurrent ? 'bg-surface border-2 border-accent-hi' : 'bg-surface-2 border border-line'}`}>
+                <span className={`text-[11px] font-bold ${s.deposit ? 'text-white/85' : 'text-muted'}`}>{shortDate(s.date)}</span>
+                <b className="text-sm">${s.amount}</b>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </Section>
+  )
+}
+
 function CurrentDeposit({ step, today, total, m, run }: { step: SavingsStep; today: string; total: number; m: MoneyData; run: Run }) {
+  const r = planRoute(m, step.ch)
   const days = Math.round((Date.parse(step.date) - Date.parse(today)) / 86400000)
   const when = days > 0 ? `on ${DAYS[dateOf(step.date).getDay()].slice(0, 3)}, ${shortDate(step.date)}` : days === 0 ? 'today' : `since ${shortDate(step.date)}`
   return (
@@ -232,7 +240,7 @@ function CurrentDeposit({ step, today, total, m, run }: { step: SavingsStep; tod
       <span className="size-3 rounded-full bg-pay shrink-0" />
       <span className="flex-1 min-w-0">
         <b className="block">Deposit {step.no} of {total}</b>
-        <span className="text-sm text-muted">Move {money(step.amount)} from SoFi to your Vault {when}</span>
+        <span className="text-sm text-muted">Move {money(step.amount)} from {r.from} to {r.to} {when}</span>
       </span>
       <button type="button" onClick={() => void run(() => saveDeposit(m, step, today))}
         className="h-11 px-4 rounded-xl border-0 bg-pay text-white font-bold cursor-pointer">Saved it</button>

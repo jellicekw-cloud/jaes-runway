@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { addDays, money, shortDate } from '../lib/dates'
 import {
-  billsAccountId, challengeSteps, estimateBalance, installmentAmount, installmentDate, logPurchase, obligationsOn, parseMoney,
+  billsAccountId, allSavingsSteps, estimateBalance, installmentAmount, installmentDate, logPurchase, obligationsOn, parseMoney,
   type MoneyData, type PayWith,
 } from '../lib/money'
 import { CATEGORIES, SENT_CATEGORY } from '../lib/types'
@@ -283,7 +283,8 @@ function buildHint(m: MoneyData, today: string, w: PayWith | undefined, amt: num
   const until = addDays(today, 14)
   let spoken = 0
   const parts: string[] = []
-  for (const s of challengeSteps(m)) {
+  for (const s of allSavingsSteps(m)) {
+    if (s.ch.from_account_id !== acct.id) continue
     if (!s.deposit && s.date >= today && s.date <= until) { spoken += s.amount; parts.push(`savings ${money(s.amount)} ${shortDate(s.date)}`) }
   }
   for (let k = today; k <= until; k = addDays(k, 1)) {

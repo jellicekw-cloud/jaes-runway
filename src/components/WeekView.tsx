@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, weekStart } from '../lib/dates'
 import { loadEntries, loadTags } from '../lib/journal'
-import { INCOME_KIND_LABEL, expectedOn, incomeOn, isPayday, obligationsOn, paycheckTotal, savingsOn, type MoneyData, type Obligation } from '../lib/money'
+import { INCOME_KIND_LABEL, expectedOn, incomeOn, isPayday, obligationsOn, paycheckTotal, savingsAllOn, type MoneyData, type Obligation } from '../lib/money'
 import { MOOD_EMOJI, type JournalEntry, type Tag } from '../lib/types'
 import { eventsOn, timeLabel, todosOn, type Plans } from '../lib/plans'
 import JournalEditor from './JournalEditor'
@@ -87,7 +87,7 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
           const d = dateOf(k)
           const entry = journal.find((j) => j.entry_date === k)
           const pay = isPayday(m, k)
-          const save = savingsOn(m, k)
+          const saves = savingsAllOn(m, k)
           const due = obligationsOn(m, k, today)
           const dayTodos = todosOn(plans, k, today)
           const dayEvents = eventsOn(plans, k)
@@ -153,13 +153,13 @@ export default function WeekView({ email, userId, today, selected, onSelect, mon
                 </span>
               ))}
 
-              {save && (
-                <span className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold min-w-0 ${save.deposit ? 'border-pay bg-pay-soft text-pay-ink' : 'border-pay bg-surface-2'}`}>
+              {saves.map((save) => (
+                <span key={save.ch.id} className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-bold min-w-0 ${save.deposit ? 'border-pay bg-pay-soft text-pay-ink' : 'border-pay bg-surface-2'}`}>
                   <span className="size-2.5 rounded-full shrink-0 bg-pay" />
-                  <span className="truncate">Savings {save.no}/{m.challenge?.deposit_count}</span>
+                  <span className="truncate">{m.accounts.find((a) => a.id === save.ch.to_account_id)?.kind === 'vault' ? 'Vault' : (m.accounts.find((a) => a.id === save.ch.to_account_id)?.institution ?? 'Savings')} {save.no}/{save.ch.deposit_count}</span>
                   <span className="ml-auto tnum">{save.deposit ? '✓' : money(save.amount)}</span>
                 </span>
-              )}
+              ))}
 
               {due.map((o) => <Chip key={o.key} o={o} />)}
 

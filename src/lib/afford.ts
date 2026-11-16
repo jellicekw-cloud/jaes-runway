@@ -1,6 +1,6 @@
 import { addDays, shortDate } from './dates'
 import {
-  billsAccountId, estimateBalance, expectedOn, isPayday, nextPayday, obligationsOn, savingsOn, installmentAmount,
+  billsAccountId, estimateBalance, expectedOn, isPayday, nextPayday, obligationsOn, savingsAllOn, installmentAmount,
   type MoneyData, type TripCost,
 } from './money'
 import type { Account, Card } from './types'
@@ -52,7 +52,6 @@ export function walk(m: MoneyData, a: Account, today: string, until: string, deb
   if (start === null) return null
   const split = m.splits.find((s) => s.account_id === a.id)?.amount ?? 0
   const billsAcct = billsAccountId(m)
-  const ch = m.challenge
   const days: { date: string; balance: number; notes: string[] }[] = []
   let bal = start
   for (let k = today; k <= until; k = addDays(k, 1)) {
@@ -65,10 +64,10 @@ export function walk(m: MoneyData, a: Account, today: string, until: string, deb
       bal -= o.amount ?? 0
       if (o.amount) notes.push(`${o.short} ${fmt(o.amount)}`)
     }
-    const save = savingsOn(m, k)
-    if (later && ch && save && !save.deposit) {
-      if (ch.from_account_id === a.id) { bal -= save.amount; notes.push(`savings ${fmt(save.amount)}`) }
-      if (ch.to_account_id === a.id) bal += save.amount
+    for (const save of savingsAllOn(m, k)) {
+      if (!later || save.deposit) continue
+      if (save.ch.from_account_id === a.id) { bal -= save.amount; notes.push(`savings ${fmt(save.amount)}`) }
+      if (save.ch.to_account_id === a.id) bal += save.amount
     }
     for (const e of expectedOn(m, k)) {
       if (e.got || e.source.account_id !== a.id || k < today) continue

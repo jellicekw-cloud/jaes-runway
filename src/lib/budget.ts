@@ -5,7 +5,7 @@ import {
   billsAccountId, challengeSteps, hasPayActual, isPayday, obligationsOn, payInto, type MoneyData, type Obligation, type SavingsStep,
 } from './money'
 import { isFastFood } from './insights'
-import { CATEGORIES, SENT_CATEGORY, type Account } from './types'
+import { CATEGORIES, SENT_CATEGORY, type Account, type SavingsChallenge } from './types'
 
 // The monthly Budget (your Clover Brook sheet): Budget vs Actual for 9 categories.
 // Actual = money that left NFCU or SoFi, counted exactly like In vs out (so the two always agree):
@@ -308,9 +308,10 @@ export function budgetMonth(m: MoneyData, x: BudgetExtras, month: string, today:
       line(`save:to:${t.from_account_id}`, `Added to ${label(t.from_account_id)}`, label(t.to_account_id)).actual -= t.amount
     }
   }
-  const ch = m.challenge
-  const chFrom = ch ? label(ch.from_account_id) || 'SoFi' : ''
-  for (const d of m.deposits) if (inRange(d.saved_on)) line('save:challenge', '52-week plan (SoFi Vault)', chFrom).actual += d.amount
+  for (const d of m.deposits) {
+    const ch = m.challenges.find((c) => c.id === d.challenge_id)
+    if (ch && inRange(d.saved_on)) line(planKey(m, ch), planLineName(m, ch), label(ch.from_account_id)).actual += d.amount
+  }
 
   // Due this month: counts so far like In vs out (auto-pay by itself; others on the due day until marked paid),
   // and what's scheduled is the usual budget
@@ -343,10 +344,10 @@ export function budgetMonth(m: MoneyData, x: BudgetExtras, month: string, today:
     }
   }
   // Scheduled savings and cash
-  if (ch) {
-    const steps: SavingsStep[] = challengeSteps(m).filter((s) => s.date >= from && s.date <= to)
+  for (const ch of m.challenges) {
+    const steps: SavingsStep[] = challengeSteps(m, ch).filter((s) => s.date >= from && s.date <= to)
     if (steps.length) {
-      const l = line('save:challenge', '52-week plan (SoFi Vault)', chFrom)
+      const l = line(planKey(m, ch), planLineName(m, ch), label(ch.from_account_id))
       for (const s of steps) {
         l.usualBudget += s.amount
         l.dueCount++
@@ -404,7 +405,7 @@ export function lineNameFromKey(m: MoneyData, key: string): string {
   if (kind === 'plan') return id === 'affirm' ? 'Affirm' : 'Afterpay / SoFi Pay in 4'
   if (kind === 'spend') return spendName(id)
   if (key === 'cash') return 'Cash allowance (Wallet)'
-  if (key === 'save:challenge') return '52-week plan (SoFi Vault)'
+  if (key.startsWith('save:challenge')) { const ch = planOfKey(m, key); return ch ? planLineName(m, ch) : '52-week plan' }
   if (kind === 'save' && id === 'to') { const a = m.accounts.find((y) => y.id === more); return `Added to ${a?.institution ?? a?.name ?? 'savings'}` }
   if (kind === 'save' && id === 'auto') { const a = m.accounts.find((y) => y.id === more); return `${a?.institution ?? a?.name ?? 'Savings'} savings` }
   return key
@@ -447,8 +448,16 @@ export function budgetYear(m: MoneyData, x: BudgetExtras, year: number, today: s
 // The 52-week plan (the savings challenge) for the Savings panel
 // ---------------------------------------------------------------------------
 
-export function planStatus(m: MoneyData, today: string) {
-  const steps = challengeSteps(m)
+/** Budget line for a 52-week plan (the first plan keeps its original key). */
+export const planKey = (m: MoneyData, ch: SavingsChallenge) => (ch.id === m.challenge?.id ? 'save:challenge' : `save:challenge:${ch.id}`)
+export const planOfKey = (m: MoneyData, key: string) => (key === 'save:challenge' ? m.challenge : m.challenges.find((c) => key === `save:challenge:${c.id}`)) ?? null
+function planLineName(m: MoneyData, ch: SavingsChallenge): string {
+  const to = m.accounts.find((a) => a.id === ch.to_account_id)
+  return `52-week plan (${to?.kind === 'vault' ? 'SoFi Vault' : to?.name ?? 'savings'})`
+}
+
+export function planStatus(m: MoneyData, today: string, ch: SavingsChallenge | null = m.challenge) {
+  const steps = challengeSteps(m, ch)
   if (!steps.length) return null
   const saved = r2(steps.reduce((t, s) => t + (s.deposit ? s.amount : 0), 0))
   const doneCount = steps.filter((s) => s.deposit).length

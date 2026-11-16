@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { money, shortDate } from '../lib/dates'
 import {
   BUDGET_CATS, CAT_COLOR, CAT_SHORT, EMPTY_EXTRAS, bankColor, budgetMonth, budgetYear, copyLastMonth, lineCat, lineNameFromKey, loadBudgetExtras,
-  monthName, planStatus, setBudgetAmount, setLineCategory, setMonthNote, shiftMonth, spendKeys,
+  monthName, planOfKey, planStatus, setBudgetAmount, setLineCategory, setMonthNote, shiftMonth, spendKeys,
   type BudgetCat, type BudgetCatRow, type BudgetExtras, type BudgetLine, type BudgetMonth, type YearMonth,
 } from '../lib/budget'
 import {
@@ -329,7 +329,6 @@ function BankPanel({ p, m, today, hide }: { p: BudgetMonth['panels'][number]; m:
 
 function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hide: boolean; run: Run }) {
   const accts = m.accounts.filter((a) => ['savings', 'vault', 'stash', 'invest'].includes(a.kind)).sort((a, b) => a.sort - b.sort)
-  const plan = planStatus(m, today)
   const [editing, setEditing] = useState<string | null>(null)
   const [val, setVal] = useState('')
   const show = (n: number | null) => (n === null ? '—' : hide ? '••••' : money(n))
@@ -340,11 +339,13 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
       <div className="px-4 pt-1 pb-3 flex flex-col text-sm">
         {accts.map((a) => {
           const est = estimateBalance(m, a, today).estimate
-          const isPlan = a.kind === 'vault' && plan
+          const ch = m.challenges.find((c) => c.to_account_id === a.id)
+          const plan = ch ? planStatus(m, today, ch) : null
+          const isPlan = Boolean(plan)
           return (
             <div key={a.id} className="py-1.5 border-b border-line last:border-b-0 flex flex-col gap-1">
               <div className="flex items-center gap-2">
-                <span className="flex-1">{a.kind === 'invest' ? `${a.name} (tracking only)` : a.kind === 'vault' ? 'SoFi Vault · 52-week plan' : a.kind === 'stash' ? 'Emergency stash' : a.institution ?? a.name}</span>
+                <span className="flex-1">{a.kind === 'invest' ? `${a.name} (tracking only)` : a.kind === 'vault' ? 'SoFi Vault · 52-week plan' : a.kind === 'stash' ? 'Emergency stash' : `${a.name}${plan ? ' · 52-week plan' : ''}`}</span>
                 {a.kind === 'invest' && editing !== a.id && (
                   <button type="button" onClick={() => { setEditing(a.id); setVal(a.balance === null ? '' : String(a.balance)) }} className="bg-transparent border-0 p-0 text-accent text-xs font-bold cursor-pointer">
                     {a.balance === null ? 'Add balance' : 'Update'}
@@ -441,8 +442,9 @@ function LineRow({ l, b, m, today, run }: { l: BudgetLine; b: BudgetMonth; m: Mo
   const [edit, setEdit] = useState(false)
   const chip = bankColor(l.from)
   const over = l.actual - l.budget > 0.005 && l.budget > 0
-  const isPlan = l.key === 'save:challenge'
-  const steps = isPlan ? challengeSteps(m).filter((s) => s.date >= b.from && s.date <= b.to) : []
+  const planCh = l.key.startsWith('save:challenge') ? planOfKey(m, l.key) : null
+  const isPlan = Boolean(planCh)
+  const steps = planCh ? challengeSteps(m, planCh).filter((s) => s.date >= b.from && s.date <= b.to) : []
 
   let box: ReactNode = null
   if (l.auto) box = <span className="text-[11px] font-bold text-muted" title="Comes out by itself">AUTO</span>
