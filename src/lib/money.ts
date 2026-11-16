@@ -1,5 +1,5 @@
 import { supabase } from './supabase'
-import { addDays, dateOf, daysBetween, isMonthlyDueOn, isRepeatingOn, keyOf } from './dates'
+import { addDays, dateOf, daysBetween, isMonthlyDueOn, isRepeatingOn, keyOf, todayKey } from './dates'
 import type {
   Account, AfterpayOrder, Bill, Card, Payment, PaycheckSplit, SavingsChallenge, SavingsDeposit, Settings, Subscription, Transaction,
 } from './types'
@@ -446,6 +446,13 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
     const cameIn = d.income.filter((x) => x.account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
     if (cameIn) changes.push({ label: 'Money in', amount: cameIn })
 
+    // Fidelity: taken out of your paycheck before it reaches the bank, so it only adds here
+    if (paycheckContribution(a)) {
+      let n = 0
+      for (let k = addDays(asOfDate, 1); k <= today; k = addDays(k, 1)) if (isPayday(d, k)) n++
+      if (n) changes.push({ label: 'From paychecks', amount: round2(n * a.auto_amount!) })
+    }
+
     // Automatic savings transfers on days after the update, through today
     for (const s of d.accounts) {
       if (!s.auto_amount || (s.id !== a.id && s.auto_from_account_id !== a.id)) continue
@@ -475,6 +482,11 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
 }
 
 /** A savings account's automatic transfer lands on this day. */
+/** An amount taken out of each paycheck before it reaches the bank (Fidelity). Never touches NFCU or SoFi. */
+export function paycheckContribution(a: Account): boolean {
+  return a.kind === 'invest' && Boolean(a.auto_amount) && !a.auto_from_account_id
+}
+
 export function autoTransferOn(a: Account, date: string): boolean {
   return Boolean(a.auto_amount && a.auto_from_account_id && a.auto_next_on && isRepeatingOnOrBefore(a.auto_next_on, a.auto_every_days ?? 14, date))
 }
@@ -610,7 +622,8 @@ export async function logSubscriptionCharges(d: MoneyData, today: string): Promi
 
 /** Records what you actually paid. A card with a balance on file goes down by that amount. */
 export async function markPaid(d: MoneyData, o: Obligation, amount: number, fromAccountId: string | null = o.fromAccountId): Promise<void> {
-  const row: Record<string, unknown> = { due_date: o.date, amount, account_id: fromAccountId }
+  // paid_on = your date (the database's own date is UTC, already tomorrow after 7 pm Eastern)
+  const row: Record<string, unknown> = { due_date: o.date, amount, account_id: fromAccountId, paid_on: todayKey() }
   if (o.kind === 'card') row.card_id = o.sourceId
   else if (o.kind === 'bill') row.bill_id = o.sourceId
   else if (o.kind === 'afterpay') { row.afterpay_order_id = o.sourceId; row.installment_no = o.installmentNo }

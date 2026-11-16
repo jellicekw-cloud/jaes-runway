@@ -2,8 +2,9 @@
 -- Jae's Runway · 20_budget.sql
 -- Paste into Supabase → SQL Editor → New query → Run (once).
 -- The monthly Budget page: what you budget per line each month, which
--- category a line goes in, a note per month, Fidelity (tracking only),
+-- category a line goes in, a note per month, Fidelity (tracking only, $65 from each paycheck),
 -- and the Lizella mortgage + HOA bills. Nothing here deletes data.
+-- Safe to run again.
 -- =====================================================================
 
 -- What you budgeted for a line in a month (lines with no row use the usual amount)
@@ -55,6 +56,10 @@ insert into public.accounts (user_id, name, institution, kind, role_note, sort)
 select s.user_id, 'Fidelity', 'Fidelity', 'invest', 'Tracking only', 8
 from public.settings s
 where not exists (select 1 from public.accounts x where x.user_id = s.user_id and x.kind = 'invest');
+
+-- Fidelity: $65 out of each paycheck (before it reaches the bank). Change it on the Money tab anytime.
+update public.accounts set auto_amount = 65, auto_every_days = 14, auto_from_account_id = null
+where kind = 'invest' and auto_amount is null;
 
 -- Lizella mortgage ($300) and HOA ($75), monthly from NFCU.
 -- Due on the 1st until you set the real day on the Bills tab; tracked from December.

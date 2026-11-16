@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { addDays, dateOf, DAYS, money, shortDate } from '../lib/dates'
 import {
-  addTransfer, autoTransferOn, deleteTransfer, estimateBalance, parseMoney, setAccountBalance, setAutoTransfer, type MoneyData,
+  addTransfer, autoTransferOn, deleteTransfer, estimateBalance, nextPayday, parseMoney, paycheckContribution, setAccountBalance, setAutoTransfer, type MoneyData,
 } from '../lib/money'
 import type { Account } from '../lib/types'
 import { Burst } from './Confetti'
@@ -17,9 +17,9 @@ export function nextAuto(a: Account, today: string): string | null {
   return null
 }
 
-/** Money tab: DECU savings and the SoFi Vault. Never counted in "Can I afford it?". */
+/** Money tab: DECU savings, the SoFi Vault and Fidelity (tracking only). Never counted in "Can I afford it?". */
 export function SavingsSection({ m, today, hide, run }: { m: MoneyData; today: string; hide: boolean; run: Run }) {
-  const list = m.accounts.filter((a) => a.kind === 'savings' || a.kind === 'vault')
+  const list = m.accounts.filter((a) => a.kind === 'savings' || a.kind === 'vault' || a.kind === 'invest')
   if (!list.length) return null
   return (
     <section aria-label="Savings" className="flex flex-col gap-3">
@@ -47,6 +47,7 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
   const [editAuto, setEditAuto] = useState(false)
   const checking = m.accounts.filter((x) => x.kind === 'checking')
   const isVault = a.kind === 'vault'
+  const isInvest = a.kind === 'invest'
   const sofi = checking.find((x) => x.institution === 'SoFi')?.id
   const defaultOther = (isVault ? (m.challenge?.from_account_id ?? sofi) : a.auto_from_account_id) ?? checking[0]?.id ?? ''
   const moves = m.transfers.filter((x) => x.to_account_id === a.id || x.from_account_id === a.id).slice(0, 3)
@@ -59,7 +60,7 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
     <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 min-w-0" data-testid={`savings-${a.institution ?? a.name}`}>
       <div className="flex items-baseline justify-between gap-2">
         <b className="text-lg">{a.name}</b>
-        <span className="text-xs text-muted">{isVault ? 'Savings challenge + extra' : a.role_note}</span>
+        <span className="text-xs text-muted">{isVault ? 'Savings challenge + extra' : isInvest ? 'Tracking only · not counted anywhere' : a.role_note}</span>
       </div>
       <div className="text-3xl font-bold tnum text-pay-ink">{show(bal)}</div>
 
@@ -84,8 +85,11 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
         </div>
       )}
 
+      {/* Out of each paycheck (Fidelity) */}
+      {isInvest && <PaycheckAmount a={a} m={m} today={today} run={run} />}
+
       {/* Automatic transfer (DECU) */}
-      {!isVault && (
+      {!isVault && !isInvest && (
         editAuto || !a.auto_amount ? (
           <AutoForm a={a} today={today} run={run} onDone={() => setEditAuto(false)} fromName={from?.institution ?? from?.name ?? 'NFCU'} />
         ) : (
@@ -100,7 +104,7 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
         )
       )}
 
-      <BalanceInput a={a} run={run} />
+      <BalanceInput a={a} run={run} label={isInvest ? 'Update from Fidelity (interest, withdrawals)' : undefined} />
 
       {moving ? (
         <MoveForm a={a} dir={moving} checking={checking} defaultOther={defaultOther} today={today} run={run} onDone={() => setMoving(null)} />
@@ -126,17 +130,17 @@ function SavingsCard({ a, m, today, hide, run }: { a: Account; m: MoneyData; tod
           })}
         </ul>
       )}
-      {lastOut && !isVault && <p className="m-0 text-xs text-muted">That's what it's there for. The auto transfer keeps building it back. 💚</p>}
+      {lastOut && !isVault && !isInvest && <p className="m-0 text-xs text-muted">That's what it's there for. The auto transfer keeps building it back. 💚</p>}
     </div>
   )
 }
 
-function BalanceInput({ a, run }: { a: Account; run: Run }) {
+function BalanceInput({ a, run, label }: { a: Account; run: Run; label?: string }) {
   const [v, setV] = useState('')
   const id = `sav-bal-${a.id}`
   return (
     <label htmlFor={id} className="flex flex-col gap-1">
-      <span className="text-xs font-bold tracking-wider uppercase text-muted">Update from your bank app</span>
+      <span className="text-xs font-bold tracking-wider uppercase text-muted">{label ?? 'Update from your bank app'}</span>
       <span className="flex items-center h-11 rounded-xl px-3 border border-line bg-surface-2 focus-within:border-accent-hi">
         <span className="text-muted">$</span>
         <input id={id} inputMode="decimal" value={v} placeholder="0.00" onChange={(e) => setV(e.target.value)}
@@ -220,6 +224,37 @@ function MoveForm({ a, dir, checking, defaultOther, today, run, onDone }: {
         <button type="button" onClick={save} className="h-10 px-4 rounded-xl border-0 bg-accent text-accent-ink font-bold cursor-pointer">{dir === 'in' ? 'Add it' : 'Take it out'}</button>
         <button type="button" onClick={onDone} className="h-10 px-4 rounded-xl border border-line bg-surface text-fg font-bold cursor-pointer">Cancel</button>
       </div>
+    </div>
+  )
+}
+
+/** Fidelity: what comes out of each paycheck before it reaches the bank. */
+function PaycheckAmount({ a, m, today, run }: { a: Account; m: MoneyData; today: string; run: Run }) {
+  const [edit, setEdit] = useState(false)
+  const [amt, setAmt] = useState(a.auto_amount ? String(a.auto_amount) : '')
+  const np = nextPayday(m, today)
+  if (edit || !paycheckContribution(a)) {
+    return (
+      <form className="flex flex-wrap items-center gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-sm" aria-label="Out of each paycheck"
+        onSubmit={(e) => { e.preventDefault(); const n = parseMoney(amt); void run(() => setAutoTransfer(a.id, { auto_amount: n && n > 0 ? n : null, auto_next_on: null })).then(() => setEdit(false)) }}>
+        <span className="font-bold">Out of each paycheck</span>
+        <span className="flex items-center h-10 rounded-xl px-3 border border-line bg-surface"><span className="text-muted">$</span>
+          <input inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="65.00" aria-label="Fidelity amount per paycheck" className="w-20 border-0 bg-transparent tnum text-fg focus:outline-none" />
+        </span>
+        <button type="submit" className="h-10 px-4 rounded-xl border-0 bg-accent text-accent-ink font-bold cursor-pointer">Save</button>
+        {paycheckContribution(a) && <button type="button" onClick={() => setEdit(false)} className="h-10 px-3 bg-transparent border-0 text-muted cursor-pointer">Cancel</button>}
+        <span className="basis-full text-xs text-muted">Taken out before your paycheck reaches the bank, so NFCU and SoFi aren't touched. Leave it empty to stop.</span>
+      </form>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-sm">
+      <span aria-hidden="true">↻</span>
+      <span className="flex-1 min-w-0">
+        <b>{money(a.auto_amount)}</b> from each paycheck
+        {np && <span className="text-muted"> · next {np.days === 0 ? 'today' : `${DAYS[dateOf(np.date).getDay()].slice(0, 3)} ${shortDate(np.date)}`}</span>}
+      </span>
+      <button type="button" onClick={() => { setAmt(String(a.auto_amount)); setEdit(true) }} className="bg-transparent border-0 text-accent font-bold cursor-pointer">Change</button>
     </div>
   )
 }

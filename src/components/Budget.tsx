@@ -6,7 +6,7 @@ import {
   type BudgetCat, type BudgetCatRow, type BudgetExtras, type BudgetLine, type BudgetMonth, type YearMonth,
 } from '../lib/budget'
 import {
-  challengeSteps, estimateBalance, markPaid, parseMoney, saveDeposit, setAccountBalance, undoDeposit, undoPayment, type MoneyData,
+  challengeSteps, estimateBalance, markPaid, parseMoney, paycheckContribution, saveDeposit, setAccountBalance, undoDeposit, undoPayment, type MoneyData,
 } from '../lib/money'
 
 // Your Clover Brook budget sheet, on the computer: Budget vs Actual for each category,
@@ -358,6 +358,9 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
                   </form>
                 ) : <b className={`tnum ${a.kind === 'invest' ? 'text-muted' : ''}`}>{show(est)}</b>}
               </div>
+              {a.kind === 'invest' && paycheckContribution(a) && (
+                <span className="text-xs text-muted">+{money(a.auto_amount).replace('.00', '')} from each paycheck (before it reaches the bank)</span>
+              )}
               {isPlan && plan && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted" data-testid="plan-status">
                   <span>{plan.doneCount} of {plan.total} paydays · {hide ? '••••' : money(plan.saved)} of {money(plan.goal)}</span>
