@@ -57,6 +57,7 @@ export function cashFlow(m: MoneyData, from: string, to: string, today: string, 
     else if (p.afterpay_order_id && !planOnCard(p.afterpay_order_id)) outs['Afterpay & Affirm'] += p.amount
   }
   for (const x of m.extraPayments) if (inRange(x.paid_on)) outs.Cards += x.amount
+  for (const x of m.loanExtras) if (inRange(x.paid_on) && (!x.account_id || checking.has(x.account_id))) outs.Bills += x.amount
   for (const x of m.transfers) {
     if (!inRange(x.moved_on)) continue
     const fromBank = x.from_account_id && checking.has(x.from_account_id)

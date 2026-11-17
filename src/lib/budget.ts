@@ -299,6 +299,13 @@ export function budgetMonth(m: MoneyData, x: BudgetExtras, month: string, today:
     l.actual += e.amount
     l.note = 'Includes extra paydown'
   }
+  for (const x of m.loanExtras) {
+    if (!inRange(x.paid_on) || (x.account_id && !checkingIds.has(x.account_id))) continue
+    const loan = m.loans.find((l) => l.id === x.loan_id)
+    const l = loan?.bill_id ? line(`bill:${loan.bill_id}`, m.bills.find((b) => b.id === loan.bill_id)?.name ?? loan.name, label(x.account_id)) : line(`bill:loan-${x.loan_id}`, loan?.name ?? 'Loan', label(x.account_id))
+    l.actual += x.amount
+    l.note = 'Includes extra principal'
+  }
   for (const t of m.transfers) {
     if (!inRange(t.moved_on)) continue
     const fromBank = t.from_account_id && checkingIds.has(t.from_account_id)

@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import type { Loan, LoanExtra } from './loans'
 import { addDays, dateOf, daysBetween, isMonthlyDueOn, isRepeatingOn, keyOf, todayKey } from './dates'
 import type {
   Account, AfterpayOrder, Bill, Card, Payment, PaycheckSplit, SavingsChallenge, SavingsDeposit, Settings, Subscription, Transaction,
@@ -24,6 +25,8 @@ export interface MoneyData {
   income: Income[]
   incomeSources: IncomeSource[]
   extraPayments: ExtraPayment[]
+  loans: Loan[]                 // car loan (22_loans.sql)
+  loanExtras: LoanExtra[]       // extra principal payments on a loan
   cardHistory: CardSnapshot[]
   transfers: Transfer[]
   payActuals: PayActual[]
@@ -51,7 +54,7 @@ export interface IncomeSource { id: string; name: string; account_id: string | n
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, challenges: [], deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], cardHistory: [], transfers: [], payActuals: [],
+  challenge: null, challenges: [], deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], loans: [], loanExtras: [], cardHistory: [], transfers: [], payActuals: [],
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
@@ -78,7 +81,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
   const failed = [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions].find((r) => r.error)
   if (failed?.error) throw failed.error
   // Money in: tables come from 05_money_in.sql; until that's run, there's simply no money in yet
-  const [inc, srcs, extra, hist, moves, actuals] = await Promise.all([
+  const [inc, srcs, extra, hist, moves, actuals, loans, loanX] = await Promise.all([
     supabase.from('income').select('id, received_on, amount, kind, from_name, account_id, income_source_id, expected_on, note, created_at')
       .gte('received_on', since).order('received_on', { ascending: false }).order('created_at', { ascending: false }),
     supabase.from('income_sources').select('id, name, account_id, days, expected_amount, is_active').eq('is_active', true).order('created_at'),
@@ -86,6 +89,8 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     supabase.from('card_balance_history').select('card_id, recorded_on, balance').gte('recorded_on', addDays(today, -400)).order('recorded_on'),   // from 09_progress.sql
     supabase.from('transfers').select('id, from_account_id, to_account_id, amount, moved_on, note, created_at').gte('moved_on', since).order('moved_on', { ascending: false }),   // from 11_savings.sql
     supabase.from('paycheck_actuals').select('id, pay_date, account_id, amount').gte('pay_date', addDays(today, -400)),   // from 19_paychecks.sql
+    supabase.from('loans').select('id, name, principal, apr, term_months, first_due, payment, bill_id, is_active').eq('is_active', true).order('created_at'),   // from 22_loans.sql
+    supabase.from('loan_extra_payments').select('id, loan_id, amount, paid_on, account_id, created_at').order('paid_on', { ascending: false }),
   ])
   const chs = ((challenges.data ?? []) as SavingsChallenge[]).map((c) => ({ ...c, first_amount: Number(c.first_amount), step_amount: Number(c.step_amount) }))
   return {
@@ -104,6 +109,8 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     income: inc.error ? [] : ((inc.data ?? []) as Income[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     cardHistory: hist.error ? [] : ((hist.data ?? []) as CardSnapshot[]).map((x) => ({ ...x, balance: Number(x.balance) })),
     extraPayments: extra.error ? [] : ((extra.data ?? []) as ExtraPayment[]).map((x) => ({ ...x, amount: Number(x.amount) })),
+    loans: loans.error ? [] : ((loans.data ?? []) as Loan[]).map((l) => ({ ...l, principal: Number(l.principal), apr: Number(l.apr), payment: Number(l.payment) })),
+    loanExtras: loanX.error ? [] : ((loanX.data ?? []) as LoanExtra[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     payActuals: actuals.error ? [] : ((actuals.data ?? []) as PayActual[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     transfers: moves.error ? [] : ((moves.data ?? []) as Transfer[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     incomeSources: srcs.error ? [] : ((srcs.data ?? []) as IncomeSource[]).map((x) => ({ ...x, expected_amount: num(x.expected_amount), days: (x.days ?? []).map(Number) })),
@@ -468,6 +475,9 @@ export function estimateBalance(d: MoneyData, a: Account, today: string): Balanc
 
     const extraPaid = d.extraPayments.filter((x) => x.account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
     if (extraPaid) changes.push({ label: 'Card paydown', amount: -extraPaid })
+
+    const loanExtra = d.loanExtras.filter((x) => x.account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
+    if (loanExtra) changes.push({ label: 'Extra on loans', amount: -loanExtra })
 
     const cameIn = d.income.filter((x) => x.account_id === a.id && after(x.created_at)).reduce((t, x) => t + x.amount, 0)
     if (cameIn) changes.push({ label: 'Money in', amount: cameIn })

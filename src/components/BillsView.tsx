@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
+import { LoanCard } from './Loans'
 import { PaydownCard, PaydownPlan } from './Paydown'
 import { DebtProgress, MilestoneBanner, StatementNudge } from './Progress'
 import { addDays, money, shortDate } from '../lib/dates'
@@ -80,6 +81,14 @@ export default function BillsView({ today, money: m, loaded, reloadMoney, onOpen
           </p>
         )}
       </Section>
+
+      {m.loans.length > 0 && (
+        <Section title="Loans" id="loans" right={<span className="font-bold tnum">{m.loans.length === 1 ? m.loans[0].name : `${m.loans.length} loans`}</span>}>
+          <div className="flex flex-col gap-3">
+            {m.loans.map((l) => <LoanCard key={l.id} loan={l} m={m} today={today} hide={m.settings?.hide_balances ?? false} run={run} />)}
+          </div>
+        </Section>
+      )}
 
       <Section title="Credit cards" id="cards" right={<span className="font-bold tnum">{m.cards.length} cards</span>}>
         <div className="grid grid-cols-1 md:grid-cols-2 items-start gap-3.5">
