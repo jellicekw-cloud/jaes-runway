@@ -6,7 +6,7 @@ import { KIND_LABEL, PASS_LABEL, type ItemKind, type PassType, type TripsData } 
 import {
   ORDER_STATUS_LABEL, RETURN_STAGE_LABEL, VIA_LABEL, addFromEmail, balanceAmount, moneyOutDefaults, applyRefund, defaultPayWith, markDroppedOff, moneyInDefaults, openReturns, payWithLabel, handled, markDelivered,
   needsFixing, notSure, onTheWay, packageTone, packagesOn, pasteEmail, recentRefunds, refundOptions, refundToFromOrder, refundToLabel, removeOrder, removeReturn,
-  rereadEmail, returnLine, shareText, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
+  loadEmailBody, rereadEmail, returnLine, shareText, returnTone, saveReturn, setEmailStatus, statusLine, stillReading, toReview, waitingCount,
   type AffirmInfo, type AfterpayInfo, type BalanceInfo, type AppointmentInfo, type MoneyInInfo, type MoneyOutInfo, type CardKind, type InboxData, type InboxEmail, type Order, type OrderInfo, type OrderStatus,
   type ReturnInfo, type ReturnRec, type ReturnStage, type Suggestion, type TripItemInfo,
 } from '../lib/inbox'
@@ -319,6 +319,10 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
   const [draft, setDraft] = useState<Suggestion>(() => (kind ? withDefaults(kind, e.suggestion, e, m) : e.suggestion))
   const [editing, setEditing] = useState(unsure && knownBalance)
   const [showBody, setShowBody] = useState(false)
+  // The email text loads only when needed (Show email, or a Gmail code that wasn't found)
+  const [body, setBody] = useState(e.body)
+  const needBody = showBody || (e.kind === 'gmail_confirm' && !e.suggestion.code)
+  useEffect(() => { if (needBody && !body) void loadEmailBody(e.id).then((b) => setBody(b || ' ')).catch(() => setBody(' ')) }, [needBody, body, e.id])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
@@ -388,8 +392,8 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
       {e.kind === 'gmail_confirm' ? (() => {
         const code = e.suggestion.code
           ?? e.subject?.match(/#(\d{6,12})/)?.[1]
-          ?? e.body.match(/confirmation code\D{0,5}(\d{6,12})/i)?.[1]
-          ?? e.body.match(/\b(\d{9})\b/)?.[1]
+          ?? body.match(/confirmation code\D{0,5}(\d{6,12})/i)?.[1]
+          ?? body.match(/\b(\d{9})\b/)?.[1]
           ?? null
         return (
         <>
@@ -407,7 +411,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
               className="ml-auto bg-transparent border-0 text-accent text-sm font-bold cursor-pointer">{showBody ? 'Hide email' : 'Show email'}</button>
           </div>
           {showBody && (
-            <pre className="m-0 max-h-72 overflow-auto rounded-xl bg-surface-2 border border-line p-3 text-xs whitespace-pre-wrap break-words font-[inherit]">{e.body || '(empty)'}</pre>
+            <pre className="m-0 max-h-72 overflow-auto rounded-xl bg-surface-2 border border-line p-3 text-xs whitespace-pre-wrap break-words font-[inherit]">{body ? (body.trim() || '(empty)') : 'Loading…'}</pre>
           )}
         </>
         )
@@ -451,7 +455,7 @@ function ReviewCard({ e, today, data, money: m, trips, onAdded, reload }: {
               className="ml-auto bg-transparent border-0 text-accent text-sm font-bold cursor-pointer">{showBody ? 'Hide email' : 'Show email'}</button>
           </div>
           {showBody && (
-            <pre className="m-0 max-h-72 overflow-auto rounded-xl bg-surface-2 border border-line p-3 text-xs whitespace-pre-wrap break-words font-[inherit]">{e.body || '(empty)'}</pre>
+            <pre className="m-0 max-h-72 overflow-auto rounded-xl bg-surface-2 border border-line p-3 text-xs whitespace-pre-wrap break-words font-[inherit]">{body ? (body.trim() || '(empty)') : 'Loading…'}</pre>
           )}
         </>
       )}

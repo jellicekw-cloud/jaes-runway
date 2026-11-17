@@ -142,18 +142,18 @@ export default function AppShell({ email, userId }: { email: string; userId: str
     try { setInbox(await loadInbox(today)) } catch { /* Inbox tables not set up yet, or offline: keep what we have */ }
   }, [today])
 
-  // Inbox: on open, when you come back to the app, every 2 minutes, and every few seconds while an email is being read
+  // Inbox: on open, when you come back to the app, every 5 minutes while it's on screen, and every few seconds while an email is being read
   useEffect(() => {
     void reloadInbox()
     const onFocus = () => { if (document.visibilityState === 'visible') void reloadInbox() }
     document.addEventListener('visibilitychange', onFocus)
-    const t = window.setInterval(() => void reloadInbox(), 120_000)
+    const t = window.setInterval(() => { if (document.visibilityState === 'visible') void reloadInbox() }, 300_000)
     return () => { document.removeEventListener('visibilitychange', onFocus); window.clearInterval(t) }
   }, [reloadInbox])
   const readingNow = stillReading(inbox).length > 0
   useEffect(() => {
     if (!readingNow) return
-    const t = window.setInterval(() => void reloadInbox(), 4000)
+    const t = window.setInterval(() => { if (document.visibilityState === 'visible') void reloadInbox() }, 5000)
     return () => window.clearInterval(t)
   }, [readingNow, reloadInbox])
 

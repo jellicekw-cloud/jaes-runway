@@ -86,7 +86,8 @@ const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 export async function loadInbox(today: string): Promise<InboxData> {
   const [emails, orders, returns] = await Promise.all([
     supabase.from('inbox_emails')
-      .select('id, source, from_name, from_address, subject, sent_at, body, status, kind, summary, suggestion, order_id, error, created_at, handled_at')
+      // Not the email text (body): it's long and only needed when you tap Show email, so it loads then (loadEmailBody)
+      .select('id, source, from_name, from_address, subject, sent_at, status, kind, summary, suggestion, order_id, error, created_at, handled_at')
       .or(`status.in.(reading,review,unsure,error),handled_at.gte.${addDays(today, -7)}`)
       .order('created_at', { ascending: false }).limit(80),
     supabase.from('orders')
@@ -101,7 +102,7 @@ export async function loadInbox(today: string): Promise<InboxData> {
   if (emails.error) throw emails.error
   if (orders.error) throw orders.error
   return {
-    emails: (emails.data ?? []).map((e) => ({ ...e, suggestion: e.suggestion ?? {} })) as InboxEmail[],
+    emails: (emails.data ?? []).map((e) => ({ ...e, body: '', suggestion: e.suggestion ?? {} })) as InboxEmail[],
     orders: (orders.data ?? []).map((o) => ({ ...o, total: num(o.total), delivered_time: o.delivered_time ? String(o.delivered_time).slice(0, 5) : null })) as Order[],
     // Before 10_returns.sql is run the table isn't there: no returns yet
     returns: returns.error ? [] : (returns.data ?? []).map((x) => ({ ...x, amount: num(x.amount) })) as ReturnRec[],
@@ -110,7 +111,16 @@ export async function loadInbox(today: string): Promise<InboxData> {
 
 export const toReview = (d: InboxData) => d.emails.filter((e) => e.status === 'review').reverse()
 export const notSure = (d: InboxData) => d.emails.filter((e) => e.status === 'unsure' || e.status === 'error').reverse()
-export const stillReading = (d: InboxData) => d.emails.filter((e) => e.status === 'reading')
+/** Emails being read right now. One that's been "reading" for over 3 minutes is stuck, not reading: it doesn't count
+ *  (otherwise the app would keep checking every few seconds forever). */
+export const stillReading = (d: InboxData) => d.emails.filter((e) => e.status === 'reading' && Date.now() - new Date(e.created_at).getTime() < 3 * 60_000)
+
+/** The email's text, loaded only when you tap Show email. */
+export async function loadEmailBody(id: string): Promise<string> {
+  const { data, error } = await supabase.from('inbox_emails').select('body').eq('id', id).maybeSingle()
+  if (error) throw error
+  return (data?.body as string | null) ?? ''
+}
 export const handled = (d: InboxData) => d.emails
   .filter((e) => ['auto', 'added', 'skipped', 'merged'].includes(e.status))
   .sort((a, b) => (b.handled_at ?? '').localeCompare(a.handled_at ?? ''))
