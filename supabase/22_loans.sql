@@ -2,7 +2,7 @@
 -- Jae's Runway · 22_loans.sql
 -- Paste into Supabase → SQL Editor → New query → Run (once; safe to run again).
 -- Loan tracker + your new car loan:
---   $24,633.17 at 6.29% for 48 months, $581.79 on the 19th, autopay from NFCU,
+--   $25,136.50 at 6.29% for 48 months, $593.93 on the 19th, autopay from NFCU,
 --   first payment Dec 19, 2026. Extra payments go straight to principal.
 -- The Kia car note stops (this loan replaces it). Nothing is deleted:
 -- the Kia bill is just turned off, with its history kept.
@@ -43,18 +43,22 @@ begin
   end loop;
 end $$;
 
--- The monthly payment as a bill: $581.79 on the 19th, autopay from NFCU, starting December
+-- The monthly payment as a bill: $593.93 on the 19th, autopay from NFCU, starting December
 insert into public.bills (user_id, name, due_day, amount, account_id, autopay, color, tracking_since)
-select a.user_id, 'Car loan', 19, 581.79, a.id, true, '#F59E0B', date '2026-12-01'
+select a.user_id, 'Car loan', 19, 593.93, a.id, true, '#F59E0B', date '2026-12-01'
 from public.accounts a
 where a.institution = 'NFCU' and a.kind = 'checking'
   and not exists (select 1 from public.bills x where x.user_id = a.user_id and x.name = 'Car loan');
 
 insert into public.loans (user_id, name, principal, apr, term_months, first_due, payment, bill_id)
-select b.user_id, 'Car loan', 24633.17, 6.29, 48, date '2026-12-19', 581.79, b.id
+select b.user_id, 'Car loan', 25136.50, 6.29, 48, date '2026-12-19', 593.93, b.id
 from public.bills b
 where b.name = 'Car loan'
   and not exists (select 1 from public.loans x where x.user_id = b.user_id and x.name = 'Car loan');
+
+-- If you ran an earlier copy of this file: bring the amounts up to date
+update public.bills set amount = 593.93 where name = 'Car loan';
+update public.loans set principal = 25136.50, payment = 593.93 where name = 'Car loan';
 
 -- The Kia car note stops (turned off, history kept)
 update public.bills set is_active = false
