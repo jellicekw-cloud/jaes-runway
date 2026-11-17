@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { shortDate } from '../lib/dates'
+import { keyOf, shortDate } from '../lib/dates'
 import {
   REPEAT_LABEL, addTodo, anytimeTodos, deleteEvent, deleteTodo, eventsOn, timeLabel, todosOn, toggleTodo,
   type CalEvent, type Plans, type Todo,
@@ -71,7 +71,8 @@ export function DayPlans({ date, today, plans, reload, showAdd = true }: { date:
     <div className="flex flex-col gap-2">
       {(events.length > 0 || todos.length > 0 || showAdd) && <span className="text-xs font-bold tracking-widest uppercase text-muted">Plans &amp; to-dos</span>}
       {events.map((e) => <EventRow key={e.id} e={e} reload={reload} />)}
-      {todos.map((t) => <TodoRow key={t.id} t={t} today={today} plans={plans} reload={reload} />)}
+      {todos.filter((t) => !t.done_at).map((t) => <TodoRow key={t.id} t={t} today={today} plans={plans} reload={reload} />)}
+      <DoneFold done={todos.filter((t) => t.done_at)} label="Done" today={today} plans={plans} reload={reload} />
       {showAdd && <QuickAdd placeholder={`Add a to-do for ${date === today ? 'today' : shortDate(date)}…`} due={date} reload={reload} id={`qa-${date}`} />}
     </div>
   )
@@ -79,8 +80,10 @@ export function DayPlans({ date, today, plans, reload, showAdd = true }: { date:
 
 /** Card of to-dos with no date, plus a quick-add box. */
 export function AnytimeTodos({ today, plans, reload }: { today: string; plans: Plans; reload: Reload }) {
-  const list = anytimeTodos(plans, today)
+  const list = anytimeTodos(plans, today).filter((t) => !t.done_at)
   const open = plans.todos.filter((t) => !t.done_at).length
+  // Everything you checked off lately (anytime and dated), newest first
+  const doneLately = plans.todos.filter((t) => t.done_at).sort((a, b) => (b.done_at ?? '').localeCompare(a.done_at ?? ''))
   return (
     <section aria-label="To-do" className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
@@ -90,7 +93,29 @@ export function AnytimeTodos({ today, plans, reload }: { today: string; plans: P
       {list.length === 0 && <p className="m-0 text-sm text-muted">Nothing without a date. Dated to-dos show on their day.</p>}
       {list.map((t) => <TodoRow key={t.id} t={t} today={today} plans={plans} reload={reload} />)}
       <QuickAdd placeholder="Add a to-do…" due={null} reload={reload} id="qa-anytime" />
+      <DoneFold done={doneLately} label="Done lately" today={today} plans={plans} reload={reload} showWhen />
     </section>
+  )
+}
+
+/** Checked-off to-dos, folded away at the bottom. Tap to see them (and uncheck one if you need to). */
+function DoneFold({ done, label, today, plans, reload, showWhen = false }: { done: Todo[]; label: string; today: string; plans: Plans; reload: Reload; showWhen?: boolean }) {
+  const [open, setOpen] = useState(false)
+  if (!done.length) return null
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="self-start flex items-center gap-1.5 h-9 px-2 -ml-2 rounded-lg border-0 bg-transparent text-sm font-bold text-muted cursor-pointer">
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span> ✓ {label} · {done.length}
+      </button>
+      {open && done.map((t) => (
+        <div key={t.id} className="flex flex-col">
+          <TodoRow t={t} today={today} plans={plans} reload={reload} />
+          {showWhen && t.done_at && <span className="pl-12 -mt-0.5 text-[11px] text-muted">Checked off {shortDate(keyOf(new Date(t.done_at)))}</span>}
+        </div>
+      ))}
+      {open && showWhen && <span className="text-[11px] text-muted">Shows what you checked off in the last 2 weeks.</span>}
+    </div>
   )
 }
 
