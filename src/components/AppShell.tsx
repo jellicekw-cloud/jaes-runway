@@ -2,7 +2,9 @@ import { WalletCard } from './Wallet'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, addDays, dateOf, money, shortDate, todayKey, weekStart } from '../lib/dates'
-import { EMPTY_MONEY, dueBeforePayday, loadMoney, logSubscriptionCharges, nextPayday, overdue, type MoneyData } from '../lib/money'
+import { EMPTY_MONEY, FULL_HISTORY_DAYS, dueBeforePayday, loadMoney, logSubscriptionCharges, nextPayday, overdue, type MoneyData } from '../lib/money'
+import { clearSnapshots, isServerDown, loadSnapshot, saveSnapshot } from '../lib/offline'
+import { OfflineBanner, UsageWarning } from './Offline'
 import JournalSearch from './JournalSearch'
 import WeekView from './WeekView'
 import BillsView from './BillsView'
@@ -30,7 +32,7 @@ type Tab = 'week' | 'bills' | 'money' | 'budget' | 'trips'
 const TAB_LABEL: Record<Tab, string> = { week: 'Week', bills: 'Bills', money: 'Money', budget: 'Budget', trips: 'Trips' }
 
 /** Header, tabs and the money data every screen shares. */
-export default function AppShell({ email, userId }: { email: string; userId: string }) {
+export default function AppShell({ email, userId, savedOnly = false }: { email: string; userId: string; savedOnly?: boolean }) {
   const today = todayKey()
   const isPhone = useIsPhone()
   const [tab, setTab] = useState<Tab>('week')
@@ -53,6 +55,19 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const [dates, setDates] = useState<SpecialDate[]>([])
   const [datesOpen, setDatesOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
+  // Saved copy: when Supabase can't be reached, show the last data this device loaded (read-only)
+  const [offlineAt, setOfflineAt] = useState<string | null>(null)
+  const who = { userId, email }
+  /** Loaded fine: keep a copy. Couldn't reach the server: use the copy. Returns the error text to show, if any. */
+  function settle<T>(key: string, ok: T | null, err: unknown, set: (d: T) => void): string {
+    if (ok !== null) { if (!savedOnly) { saveSnapshot(key, ok, who); setOfflineAt(null) } return '' }
+    const snap = savedOnly || isServerDown(err) ? loadSnapshot<T>(key) : null
+    if (snap) { set(snap.data); setOfflineAt((a) => (a && a < snap.at ? a : snap.at)); return '' }
+    return err instanceof Error ? err.message : String((err as { message?: string })?.message ?? err)
+  }
+  // A year of history only when the Budget's Year view asks for it (keeps normal loads small)
+  const [historyDays, setHistoryDays] = useState(0)
+  const needHistory = useCallback(() => setHistoryDays(FULL_HISTORY_DAYS), [])
 
   // Tapping a notification opens Runway at the right place (?open=inbox | bills | home)
   useEffect(() => {
@@ -104,43 +119,50 @@ export default function AppShell({ email, userId }: { email: string; userId: str
   const subsLogged = useRef(false)
 
   const reloadMoney = useCallback(async () => {
+    const days = historyDays || undefined
     try {
-      let data = await loadMoney(today)
+      if (savedOnly) throw new Error('saved copy')
+      let data = await loadMoney(today, days)
       // Once per visit: put any auto-pay charges that have happened into the spending log
       if (!subsLogged.current) {
         subsLogged.current = true
-        if (await logSubscriptionCharges(data, today)) data = await loadMoney(today)
+        if (await logSubscriptionCharges(data, today)) data = await loadMoney(today, days)
       }
       setMoneyData(data)
-      setMoneyError('')
+      setMoneyError(settle('money', data, null, setMoneyData))
     } catch (e) {
-      setMoneyError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
+      setMoneyError(settle<MoneyData>('money', null, e, setMoneyData))
     }
     setMoneyLoaded(true)
-  }, [today])
+  }, [today, historyDays])   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { void reloadMoney() }, [reloadMoney])
 
   const reloadPlans = useCallback(async () => {
-    try { setPlans(await loadPlans(today)); setPlansError('') } catch (e) {
-      setPlansError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
-    }
-  }, [today])
+    try {
+      if (savedOnly) throw new Error('saved copy')
+      const p = await loadPlans(today); setPlans(p); setPlansError(settle('plans', p, null, setPlans))
+    } catch (e) { setPlansError(settle<Plans>('plans', null, e, setPlans)) }
+  }, [today])   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { void reloadPlans() }, [reloadPlans])
 
   const reloadTrips = useCallback(async () => {
-    try { setTrips(await loadTrips()); setTripsError('') } catch (e) {
-      setTripsError(e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e))
-    }
+    try {
+      if (savedOnly) throw new Error('saved copy')
+      const t = await loadTrips(); setTrips(t); setTripsError(settle('trips', t, null, setTrips))
+    } catch (e) { setTripsError(settle<TripsData>('trips', null, e, setTrips)) }
     setTripsLoaded(true)
-  }, [])
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { void reloadTrips() }, [reloadTrips])
 
   const reloadInbox = useCallback(async () => {
-    try { setInbox(await loadInbox(today)) } catch { /* Inbox tables not set up yet, or offline: keep what we have */ }
-  }, [today])
+    try {
+      if (savedOnly) throw new Error('saved copy')
+      const d = await loadInbox(today); setInbox(d); settle('inbox', d, null, setInbox)
+    } catch (e) { settle<InboxData>('inbox', null, e, setInbox) /* not set up yet, or offline: keep what we have */ }
+  }, [today])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Inbox: on open, when you come back to the app, every 5 minutes while it's on screen, and every few seconds while an email is being read
   useEffect(() => {
@@ -229,6 +251,8 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       <LogPurchase open={logOpen} onClose={() => setLogOpen(false)} mode={addMode} onMode={setAddMode} reloadPlans={reloadPlans}
         onPasteEmail={() => { setLogOpen(false); openInbox(true) }}
         today={today} money={moneyData} reloadMoney={reloadMoney} onLogged={showToast} />
+      {offlineAt && <OfflineBanner at={offlineAt} isPhone={isPhone} savedOnly={savedOnly} onRetry={() => { if (savedOnly) window.location.reload(); else void Promise.all([reloadMoney(), reloadPlans(), reloadTrips(), reloadInbox()]) }} />}
+      {!offlineAt && <UsageWarning isPhone={isPhone} />}
       {plansError && (
         <div role="alert" className="fixed left-3 right-3 top-3 z-40 rounded-xl bg-bad text-white px-4 py-2.5 text-sm font-bold">
           Couldn't load to-dos and events: {plansError}{' '}
@@ -353,7 +377,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
         </button>
         <JournalSearch onPick={openDay} />
         <BellButton onClick={() => setNotifOpen(true)} />
-        <button type="button" onClick={() => supabase.auth.signOut()}
+        <button type="button" onClick={() => { clearSnapshots(); void supabase.auth.signOut().then(() => { if (savedOnly) window.location.reload() }) }}
           className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-header-muted text-sm font-bold cursor-pointer hover:bg-header-2">
           Sign out
         </button>
@@ -376,7 +400,7 @@ export default function AppShell({ email, userId }: { email: string; userId: str
       {tab === 'bills' && <BillsView tripCosts={tripCosts} today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onOpenDay={openDay} />}
       {tab === 'trips' && tripsView}
       {tab === 'money' && <MoneyView today={today} money={moneyData} loaded={moneyLoaded} reloadMoney={reloadMoney} onLog={() => openAdd('buy')} onMoneyIn={() => openAdd('in')} onOpenBudget={() => setTab('budget')} afford={<><AffordCheck m={moneyData} today={today} tripCosts={tripCosts} /><RecapCard m={moneyData} today={today} /></>} />}
-      {tab === 'budget' && <BudgetView m={moneyData} today={today} loaded={moneyLoaded} reloadMoney={reloadMoney} />}
+      {tab === 'budget' && <BudgetView m={moneyData} today={today} loaded={moneyLoaded} reloadMoney={reloadMoney} needHistory={needHistory} offline={Boolean(offlineAt)} />}
 
       {shared}
     </div>

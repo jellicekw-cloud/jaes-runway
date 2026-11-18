@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { loadSnapshot, saveSnapshot } from '../lib/offline'
 import { money, shortDate } from '../lib/dates'
 import {
   BUDGET_CATS, CAT_COLOR, CAT_SHORT, EMPTY_EXTRAS, bankColor, budgetMonth, budgetYear, copyLastMonth, lineCat, lineNameFromKey, loadBudgetExtras,
@@ -19,20 +20,33 @@ const remember = (k: string, v?: string) => { try { if (v === undefined) return 
 /** Your budget amounts, moved lines and notes, loaded once and reloaded after a change. */
 export function useBudgetExtras(): [BudgetExtras, () => Promise<void>] {
   const [x, setX] = useState<BudgetExtras>(EMPTY_EXTRAS)
-  const reload = async () => { try { setX(await loadBudgetExtras()) } catch { /* not set up yet */ } }
+  const reload = async () => {
+    try {
+      const got = await loadBudgetExtras()
+      if (got.ready) { setX(got); saveSnapshot('budget', got); return }
+      // Not reachable (or not set up yet): show the saved copy, read-only
+      const snap = loadSnapshot<BudgetExtras>('budget')
+      setX(snap ? { ...snap.data, ready: false } : got)
+    } catch { /* not set up yet */ }
+  }
   useEffect(() => { void reload() }, [])
   return [x, reload]
 }
 
-interface Props { m: MoneyData; today: string; loaded: boolean; reloadMoney: () => Promise<void> }
+interface Props { m: MoneyData; today: string; loaded: boolean; reloadMoney: () => Promise<void>; needHistory?: () => void; offline?: boolean }
 
-export default function BudgetView({ m, today, loaded, reloadMoney }: Props) {
+export default function BudgetView({ m, today, loaded, reloadMoney, needHistory, offline = false }: Props) {
   const [x, reloadExtras] = useBudgetExtras()
   const [month, setMonth] = useState(today.slice(0, 7))
   const [view, setView] = useState<'month' | 'year'>('month')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [open, setOpen] = useState<Set<BudgetCat>>(() => new Set((remember('runway-budget-open') ?? 'House').split('|').filter(Boolean) as BudgetCat[]))
+  // The Year view (or an older month) needs more history than a normal load has
+  useEffect(() => {
+    if (!needHistory || !m.historyFrom) return
+    if (view === 'year' || `${month}-01` < m.historyFrom) needHistory()
+  }, [view, month, m.historyFrom, needHistory])
   const pieRef = useRef<SVGSVGElement>(null)
   const barsRef = useRef<SVGSVGElement>(null)
 
@@ -106,7 +120,7 @@ export default function BudgetView({ m, today, loaded, reloadMoney }: Props) {
         </button>
       </header>
 
-      {!x.ready && (
+      {!x.ready && !offline && (
         <p role="status" className="m-0 rounded-xl border border-warn bg-warn-soft px-4 py-3 text-sm font-bold">
           To save budget amounts, run <code>supabase/20_budget.sql</code> once in Supabase → SQL Editor. Until then the page shows the usual amounts (bills, minimums, auto-pay) and what really went out.
         </p>
@@ -283,12 +297,12 @@ function Bars({ rows, month, onMonth, svgRef }: { rows: YearMonth[]; month?: str
           return (
             <g key={r.month} style={{ cursor: r.tracked ? 'pointer' : 'default' }} onClick={() => r.tracked && onMonth(r.month)}>
               <rect x={i * colW} y="0" width={colW} height={H} fill={bold ? '#F1F5F9' : 'transparent'} />
-              {r.tracked ? (
+              {r.b ? (
                 <>
                   <rect x={x0 - 22} y={base - h(inc)} width="20" height={h(inc)} rx="4" fill="#15803D"><title>{`${r.label}: in ${money(inc)}`}</title></rect>
                   <rect x={x0 + 2} y={base - h(out)} width="20" height={h(out)} rx="4" fill={ORANGE}><title>{`${r.label}: out ${money(out)}`}</title></rect>
                 </>
-              ) : <text x={x0} y={base - 8} textAnchor="middle" fontSize="14" fill="#94A3B8">—</text>}
+              ) : <text x={x0} y={base - 8} textAnchor="middle" fontSize="14" fill="#94A3B8">{r.loading ? '…' : '—'}</text>}
               <text x={x0} y={base + 22} textAnchor="middle" fontSize="14" fontWeight={bold ? 800 : 500} fill="#475569" fontFamily="Inter, sans-serif">{r.label}</text>
             </g>
           )
@@ -558,7 +572,7 @@ function YearPage({ rows, barsRef, pieRef, onMonth }: { rows: YearMonth[]; barsR
                 <span className={`text-right font-bold ${r.b.actualTotal > r.b.budgetTotal + 0.005 ? 'text-warn' : ''}`}>{money(r.b.actualTotal)}</span>
                 <span className={`text-right font-bold ${r.b.difference >= 0 ? 'text-pay-ink' : 'text-bad'}`}>{r.b.difference >= 0 ? '+' : '−'}{money(Math.abs(r.b.difference))}</span>
               </>
-            ) : <span className="col-span-4 text-right text-muted">—</span>}
+            ) : <span className="col-span-4 text-right text-muted">{r.loading ? 'Loading…' : '—'}</span>}
           </button>
         ))}
         {tracked.length > 0 && (

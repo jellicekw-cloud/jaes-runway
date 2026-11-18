@@ -433,7 +433,7 @@ function shortDay(k: string): string {
 // The year
 // ---------------------------------------------------------------------------
 
-export interface YearMonth { month: string; label: string; tracked: boolean; b: BudgetMonth | null }
+export interface YearMonth { month: string; label: string; tracked: boolean; loading: boolean; b: BudgetMonth | null }
 
 /** Runway's first month (the first payday it knows about). */
 export function trackingStart(m: MoneyData): string {
@@ -447,7 +447,8 @@ export function budgetYear(m: MoneyData, x: BudgetExtras, year: number, today: s
   return MONTHS.map((name, i) => {
     const month = `${year}-${String(i + 1).padStart(2, '0')}`
     const tracked = month >= first && month <= now
-    return { month, label: name.slice(0, 3), tracked, b: tracked ? budgetMonth(m, x, month, today) : null }
+    const loading = tracked && Boolean(m.historyFrom) && `${month}-01` < m.historyFrom   // older than what's loaded yet
+    return { month, label: name.slice(0, 3), tracked, loading, b: tracked && !loading ? budgetMonth(m, x, month, today) : null }
   })
 }
 

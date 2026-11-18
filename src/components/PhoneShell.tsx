@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { clearSnapshots } from '../lib/offline'
 import { supabase } from '../lib/supabase'
 import { DAYS, MONTHS, dateOf } from '../lib/dates'
 import type { MoneyData } from '../lib/money'
@@ -70,7 +71,7 @@ export default function PhoneShell(p: Props) {
           <button type="button" aria-label={searching ? 'Close search' : 'Search journal'} aria-pressed={searching} onClick={() => setSearching(!searching)}
             className="size-11 rounded-full border-0 bg-header-2 text-white grid place-items-center cursor-pointer"><Search /></button>
           {p.onBell && <BellButton onClick={p.onBell} />}
-          <button type="button" aria-label="Sign out" onClick={() => supabase.auth.signOut()}
+          <button type="button" aria-label="Sign out" onClick={() => { clearSnapshots(); void supabase.auth.signOut().then(() => window.location.reload()) }}
             className="size-11 rounded-full border-0 bg-header-2 text-header-muted grid place-items-center cursor-pointer"><SignOut /></button>
         </div>
         {searching && (

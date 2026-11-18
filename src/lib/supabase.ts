@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { countingFetch } from './offline'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -10,4 +11,5 @@ export const isConfigured = Boolean(url && key)
 // database is what keeps your data private, not this key.
 export const supabase = createClient(url ?? 'https://not-configured.supabase.co', key ?? 'not-configured', {
   auth: { persistSession: true, autoRefreshToken: true },
+  global: { fetch: countingFetch },   // counts what this device downloads (Settings → Data used)
 })

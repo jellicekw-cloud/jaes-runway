@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { supabase } from '../lib/supabase'
 
-export default function Login() {
+export default function Login({ onViewSaved }: { onViewSaved?: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -69,6 +69,12 @@ export default function Login() {
           </button>
           <button type="button" onClick={() => void forgot()} disabled={busy}
             className="self-center bg-transparent border-0 text-header-muted text-sm font-bold underline cursor-pointer">Forgot password?</button>
+          {onViewSaved && (
+            <button type="button" onClick={onViewSaved}
+              className="h-11 rounded-xl border border-header-2 bg-transparent text-header-muted font-bold cursor-pointer">
+              📴 Can't sign in? See my saved copy
+            </button>
+          )}
         </form>
       </div>
     </div>

@@ -30,6 +30,7 @@ export interface MoneyData {
   cardHistory: CardSnapshot[]
   transfers: Transfer[]
   payActuals: PayActual[]
+  historyFrom: string            // the oldest day loaded (transactions, income, transfers)
 }
 
 /** What a paycheck really was, per account (19_paychecks.sql). */
@@ -54,17 +55,18 @@ export interface IncomeSource { id: string; name: string; account_id: string | n
 
 export const EMPTY_MONEY: MoneyData = {
   settings: null, accounts: [], splits: [], cards: [], bills: [], subs: [], orders: [], payments: [],
-  challenge: null, challenges: [], deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], loans: [], loanExtras: [], cardHistory: [], transfers: [], payActuals: [],
+  challenge: null, challenges: [], deposits: [], transactions: [], income: [], incomeSources: [], extraPayments: [], loans: [], loanExtras: [], cardHistory: [], transfers: [], payActuals: [], historyFrom: '',
 }
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 /** How far back the spending log and balance estimates look (a year+, for the Budget's year view). */
-const HISTORY_DAYS = 400
+const HISTORY_DAYS = 120   // normal loads; the Budget's Year view asks for more (FULL_HISTORY_DAYS)
+export const FULL_HISTORY_DAYS = 400
 
-export async function loadMoney(today: string): Promise<MoneyData> {
-  const since = addDays(today, -HISTORY_DAYS)
+export async function loadMoney(today: string, historyDays = HISTORY_DAYS): Promise<MoneyData> {
+  const since = addDays(today, -historyDays)
   const [settings, accounts, splits, cards, bills, subs, orders, payments, challenges, deposits, transactions] = await Promise.all([
     supabase.from('settings').select('*').maybeSingle(),
     supabase.from('accounts').select('*').eq('is_active', true).order('sort'),
@@ -111,6 +113,7 @@ export async function loadMoney(today: string): Promise<MoneyData> {
     extraPayments: extra.error ? [] : ((extra.data ?? []) as ExtraPayment[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     loans: loans.error ? [] : ((loans.data ?? []) as Loan[]).map((l) => ({ ...l, principal: Number(l.principal), apr: Number(l.apr), payment: Number(l.payment) })),
     loanExtras: loanX.error ? [] : ((loanX.data ?? []) as LoanExtra[]).map((x) => ({ ...x, amount: Number(x.amount) })),
+    historyFrom: since,
     payActuals: actuals.error ? [] : ((actuals.data ?? []) as PayActual[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     transfers: moves.error ? [] : ((moves.data ?? []) as Transfer[]).map((x) => ({ ...x, amount: Number(x.amount) })),
     incomeSources: srcs.error ? [] : ((srcs.data ?? []) as IncomeSource[]).map((x) => ({ ...x, expected_amount: num(x.expected_amount), days: (x.days ?? []).map(Number) })),

@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase, isConfigured } from './lib/supabase'
 import Login, { SetNewPassword } from './components/Login'
 import AppShell from './components/AppShell'
+import { snapshotMeta } from './lib/offline'
 
 // A password reset link lands here with #...type=recovery (read before Supabase tidies the address bar)
 const recoveryLink = typeof window !== 'undefined' && /type=recovery/.test(window.location.hash)
@@ -11,13 +12,15 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [checking, setChecking] = useState(true)
   const [recovering, setRecovering] = useState(recoveryLink)
+  const [viewSaved, setViewSaved] = useState(false)
+  const saved = snapshotMeta()   // the last copy this device loaded (for when Supabase can't be reached)
 
   useEffect(() => {
     if (!isConfigured) { setChecking(false); return }
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setChecking(false)
-    })
+    // If the server can't be reached this can be slow or fail: don't sit on the splash screen forever
+    const giveUp = window.setTimeout(() => setChecking(false), 8000)
+    supabase.auth.getSession().then(({ data }) => setSession(data.session)).catch(() => { /* sign-in screen */ })
+      .finally(() => { window.clearTimeout(giveUp); setChecking(false) })
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       if (event === 'PASSWORD_RECOVERY') setRecovering(true)
       setSession(s)
@@ -27,7 +30,10 @@ export default function App() {
 
   if (!isConfigured) return <NotConfigured />
   if (checking) return <Splash />
-  if (!session) return <Login />
+  if (!session) {
+    if (viewSaved && saved) return <AppShell email={saved.email} userId={saved.userId} savedOnly />
+    return <Login onViewSaved={saved ? () => setViewSaved(true) : undefined} />
+  }
   if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />
   return <AppShell email={session.user.email ?? ''} userId={session.user.id} />
 }

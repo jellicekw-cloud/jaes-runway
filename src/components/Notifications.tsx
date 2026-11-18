@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { UsageCard } from './Offline'
 import {
   loadAlertPrefs, pushState, pushSupported, saveAlertPrefs, sendTestPush, turnOffPush, turnOnPush, type AlertPrefs, type PushState,
 } from '../lib/push'
@@ -66,6 +67,7 @@ export function NotificationsPanel({ open, onClose, isPhone }: { open: boolean; 
         <button type="button" onClick={onClose} aria-label="Close notifications" className="size-10 rounded-full border border-header-2 bg-transparent text-white cursor-pointer">✕</button>
       </div>
       <div className="p-4 flex flex-col gap-5">
+        <UsageCard />
         {!loaded ? <p className="m-0 text-muted">Loading…</p> : (
           <>
             <section className="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-3">
