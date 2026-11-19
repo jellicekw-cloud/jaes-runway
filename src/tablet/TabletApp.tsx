@@ -8,19 +8,27 @@ import { parseMoney, type PayWith } from '../lib/money'
 import BudgetView, { BudgetActionsContext, type BudgetActions } from '../components/Budget'
 import Login from '../components/Login'
 import {
-  EMPTY_TABLET, applyLocal, backupBlob, enqueue, loadTablet, newLocalId, readBackup, saveTablet, sync, type Op, type TabletData,
+  EMPTY_TABLET, STANDALONE_KEY, applyLocal, backupBlob, enqueue, loadTablet, newLocalId, readBackup, saveTablet, sync, type Op, type TabletData,
 } from './store'
+import { seedStandalone } from './standalone'
+
+const MODE = 'runway-tablet-mode'
+type Mode = 'runway' | 'standalone'
+const readMode = (): Mode => { try { return localStorage.getItem(MODE) === 'standalone' ? 'standalone' : 'runway' } catch { return 'runway' } }
+const keyFor = (mode: Mode) => (mode === 'standalone' ? STANDALONE_KEY : undefined)
 
 // Runway Budget for the tablet: the budget lives here (works with no internet), and changes go to Runway when it can.
 
 const ORANGE = '#E8562A'
 const NAVY = '#22405F'
-type Status = 'idle' | 'syncing' | 'offline' | 'signed-out'
+type Status = 'idle' | 'syncing' | 'offline' | 'signed-out' | 'standalone'
 
 interface InstallEvent extends Event { prompt: () => Promise<void> }
 
 export default function TabletApp() {
-  const [data, setDataRaw] = useState<TabletData>(loadTablet)
+  const [mode, setModeRaw] = useState<Mode>(readMode)
+  const modeRef = useRef(mode)
+  const [data, setDataRaw] = useState<TabletData>(() => loadTablet(keyFor(readMode())) ?? EMPTY_TABLET)
   const dataRef = useRef(data)
   const [session, setSession] = useState<Session | null>(null)
   const [checked, setChecked] = useState(false)
@@ -37,7 +45,7 @@ export default function TabletApp() {
   const setData = useCallback((d: TabletData) => {
     dataRef.current = d
     setDataRaw(d)
-    if (!saveTablet(d)) setNote('This tablet is out of storage space. Use Back up, then free some space.')
+    if (!saveTablet(d, keyFor(modeRef.current))) setNote('This tablet is out of storage space. Use Back up, then free some space.')
   }, [])
 
   // Signed in? (Runway and this page share the sign-in on this tablet)
@@ -51,7 +59,21 @@ export default function TabletApp() {
     return () => { sub.subscription.unsubscribe(); window.removeEventListener('beforeinstallprompt', onInstall) }
   }, [])
 
+  /** Switch between the Runway-synced budget and the stand-alone one (each keeps its own data). */
+  const switchMode = useCallback((next: Mode) => {
+    try { localStorage.setItem(MODE, next) } catch { /* fine */ }
+    modeRef.current = next
+    setModeRaw(next)
+    const d = loadTablet(keyFor(next)) ?? (next === 'standalone' ? seedStandalone(todayKey()) : EMPTY_TABLET)
+    dataRef.current = d
+    setDataRaw(d)
+    saveTablet(d, keyFor(next))
+    setStatus(next === 'standalone' ? 'standalone' : 'idle')
+    setNote('')
+  }, [])
+
   const runSync = useCallback(async (pull: boolean) => {
+    if (modeRef.current === 'standalone') { setStatus('standalone'); return }
     if (busy.current) return
     const t = todayKey()
     setToday(t)
@@ -86,10 +108,11 @@ export default function TabletApp() {
     document.addEventListener('visibilitychange', vis)
     const t = window.setInterval(() => { if (document.visibilityState === 'visible') void runSync(true) }, 30 * 60_000)
     return () => { window.removeEventListener('online', online); document.removeEventListener('visibilitychange', vis); window.clearInterval(t) }
-  }, [checked, session?.user.id, runSync])
+  }, [checked, session?.user.id, runSync, mode])
 
   /** A change: apply here now; send to Runway shortly. */
   const change = useCallback(async (op: Op, label: string) => {
+    if (modeRef.current === 'standalone') { setData(applyLocal(dataRef.current, op, todayKey())); return }   // stays on the tablet
     setData(enqueue(dataRef.current, op, label, todayKey()))
     window.clearTimeout(pushTimer.current)
     pushTimer.current = window.setTimeout(() => void runSync(false), 800)
@@ -112,7 +135,7 @@ export default function TabletApp() {
   }), [change])
 
   if (!checked && !data.m) return <div className="min-h-screen bg-header" />
-  if (!session && !data.m) return <Login />
+  if (!session && !data.m && mode === 'runway') return <Login onViewSaved={() => switchMode('standalone')} savedLabel="📒 Use the stand-alone budget (no sign-in)" />
 
   const m = data.m
   const waiting = data.outbox.length
@@ -120,7 +143,8 @@ export default function TabletApp() {
   const pulled = data.pulledAt ? new Date(data.pulledAt) : null
   const pulledLabel = pulled ? `${pulled.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${pulled.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : 'never'
 
-  const pill = status === 'syncing' ? { t: 'Syncing with Runway…', c: NAVY }
+  const pill = mode === 'standalone' ? { t: '📒 Stand-alone · saved on this tablet only', c: '#0F766E' }
+    : status === 'syncing' ? { t: 'Syncing with Runway…', c: NAVY }
     : status === 'signed-out' ? { t: 'Not signed in · changes stay on this tablet', c: '#B45309' }
     : status === 'offline' ? { t: `📴 Offline · changes saved on this tablet${waiting ? ` (${waiting} to send)` : ''}`, c: '#B45309' }
     : errors ? { t: `⚠️ ${errors} change${errors === 1 ? '' : 's'} couldn't be sent`, c: '#DC2626' }
@@ -132,13 +156,16 @@ export default function TabletApp() {
       <div className="sticky top-0 z-20 bg-header text-white safe-x py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2" data-testid="tablet-bar">
         <b className="text-lg">Runway · Budget</b>
         <span className="rounded-full px-3 py-1 text-sm font-bold" style={{ background: pill.c }} data-testid="tablet-status">{pill.t}</span>
-        <span className="text-xs text-header-muted">Pulled {pulledLabel}</span>
+        {mode === 'runway' && <span className="text-xs text-header-muted">Pulled {pulledLabel}</span>}
         <span className="flex-1" />
-        {session && <button type="button" onClick={() => void runSync(true)} disabled={status === 'syncing'} className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-white font-bold cursor-pointer disabled:opacity-50">↻ Pull from Runway</button>}
+        {session && mode === 'runway' && <button type="button" onClick={() => void runSync(true)} disabled={status === 'syncing'} className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-white font-bold cursor-pointer disabled:opacity-50">↻ Pull from Runway</button>}
         {waiting > 0 && <button type="button" aria-expanded={showOutbox} onClick={() => setShowOutbox(!showOutbox)} className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-white font-bold cursor-pointer">Waiting · {waiting}</button>}
         <BackupButtons data={data} onRestore={(d) => { setData(d); setNote('Restored from your backup.') }} />
         {install && <button type="button" onClick={() => void install.prompt().then(() => setInstall(null))} className="h-10 px-3 rounded-xl border-0 font-bold cursor-pointer text-white" style={{ background: ORANGE }}>Install on this tablet</button>}
-        {!session && <button type="button" onClick={() => setSigningIn(true)} className="h-10 px-3 rounded-xl border-0 bg-accent-hi text-white font-bold cursor-pointer">Sign in to sync</button>}
+        <button type="button" onClick={() => switchMode(mode === 'standalone' ? 'runway' : 'standalone')} className="h-10 px-3 rounded-xl border border-header-2 bg-transparent text-white font-bold cursor-pointer">
+          {mode === 'standalone' ? 'Switch to Runway budget' : 'Stand-alone budget'}
+        </button>
+        {!session && mode === 'runway' && <button type="button" onClick={() => setSigningIn(true)} className="h-10 px-3 rounded-xl border-0 bg-accent-hi text-white font-bold cursor-pointer">Sign in to sync</button>}
       </div>
       {signingIn && !session && (
         <div className="fixed inset-0 z-50">

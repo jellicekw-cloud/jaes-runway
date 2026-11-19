@@ -10,6 +10,7 @@ import { isServerDown } from '../lib/offline'
 // (actuals, paychecks, bills), then puts anything still waiting back on top, so nothing is lost or doubled.
 
 const KEY = 'runway-tablet-v1'
+export const STANDALONE_KEY = 'runway-standalone-v1'   // the stand-alone budget (no Runway) is kept separately
 
 export type Op =
   | { t: 'budget'; month: string; key: string; amount: number | null }
@@ -35,17 +36,17 @@ export interface TabletData {
 
 export const EMPTY_TABLET: TabletData = { version: 1, userId: null, m: null, x: { ...EMPTY_EXTRAS, ready: true }, pulledAt: null, outbox: [] }
 
-export function loadTablet(): TabletData {
+export function loadTablet(key = KEY): TabletData | null {
   try {
-    const raw = localStorage.getItem(KEY)
-    if (!raw) return EMPTY_TABLET
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
     const d = JSON.parse(raw) as TabletData
-    return d?.version === 1 ? { ...EMPTY_TABLET, ...d, x: { ...d.x, ready: true } } : EMPTY_TABLET
-  } catch { return EMPTY_TABLET }
+    return d?.version === 1 ? { ...EMPTY_TABLET, ...d, x: { ...d.x, ready: true } } : null
+  } catch { return null }
 }
 
-export function saveTablet(d: TabletData): boolean {
-  try { localStorage.setItem(KEY, JSON.stringify(d)); return true } catch { return false }
+export function saveTablet(d: TabletData, key = KEY): boolean {
+  try { localStorage.setItem(key, JSON.stringify(d)); return true } catch { return false }
 }
 
 const uid = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`)
