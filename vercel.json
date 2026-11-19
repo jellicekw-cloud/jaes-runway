@@ -1,7 +1,3 @@
 {
-  "rewrites": [
-    { "source": "/tablet", "destination": "/tablet/index.html" },
-    { "source": "/tablet/((?!sw\\.js|manifest\\.webmanifest).*)", "destination": "/tablet/index.html" },
-    { "source": "/((?!tablet/).*)", "destination": "/index.html" }
-  ]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }
