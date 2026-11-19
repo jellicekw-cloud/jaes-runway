@@ -14,7 +14,11 @@ import { seedStandalone } from './standalone'
 
 const MODE = 'runway-tablet-mode'
 type Mode = 'runway' | 'standalone'
-const readMode = (): Mode => { try { return localStorage.getItem(MODE) === 'standalone' ? 'standalone' : 'runway' } catch { return 'runway' } }
+const readMode = (): Mode => {
+  // /tablet/?standalone opens the stand-alone budget straight away (no sign-in screen at all)
+  if (new URLSearchParams(window.location.search).has('standalone')) { try { localStorage.setItem(MODE, 'standalone') } catch { /* fine */ } return 'standalone' }
+  try { return localStorage.getItem(MODE) === 'standalone' ? 'standalone' : 'runway' } catch { return 'runway' }
+}
 const keyFor = (mode: Mode) => (mode === 'standalone' ? STANDALONE_KEY : undefined)
 
 // Runway Budget for the tablet: the budget lives here (works with no internet), and changes go to Runway when it can.
@@ -28,7 +32,10 @@ interface InstallEvent extends Event { prompt: () => Promise<void> }
 export default function TabletApp() {
   const [mode, setModeRaw] = useState<Mode>(readMode)
   const modeRef = useRef(mode)
-  const [data, setDataRaw] = useState<TabletData>(() => loadTablet(keyFor(readMode())) ?? EMPTY_TABLET)
+  const [data, setDataRaw] = useState<TabletData>(() => {
+    const mode0 = readMode()
+    return loadTablet(keyFor(mode0)) ?? (mode0 === 'standalone' ? seedStandalone(todayKey()) : EMPTY_TABLET)
+  })
   const dataRef = useRef(data)
   const [session, setSession] = useState<Session | null>(null)
   const [checked, setChecked] = useState(false)
