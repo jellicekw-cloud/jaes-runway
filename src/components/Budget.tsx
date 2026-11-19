@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { loadSnapshot, saveSnapshot } from '../lib/offline'
 import { money, shortDate } from '../lib/dates'
 import {
@@ -7,8 +7,29 @@ import {
   type BudgetCat, type BudgetCatRow, type BudgetExtras, type BudgetLine, type BudgetMonth, type YearMonth,
 } from '../lib/budget'
 import {
-  challengeSteps, estimateBalance, markPaid, parseMoney, paycheckContribution, saveDeposit, setAccountBalance, undoDeposit, undoPayment, type MoneyData,
+  challengeSteps, estimateBalance, markPaid, parseMoney, paycheckContribution, saveDeposit, setAccountBalance, undoDeposit, undoPayment, type MoneyData, type Obligation, type SavingsStep,
 } from '../lib/money'
+
+/** Every change the Budget page makes. Runway saves straight to Supabase (liveActions); the tablet app
+ *  saves on the tablet first and sends to Runway when it can (src/tablet). */
+export interface BudgetActions {
+  setBudget: (month: string, key: string, amount: number | null) => Promise<void>
+  setCat: (key: string, cat: BudgetCat | null) => Promise<void>
+  setNote: (month: string, note: string) => Promise<void>
+  copyLast: (x: BudgetExtras, month: string) => Promise<number>
+  markPaid: (m: MoneyData, o: Obligation, amount: number) => Promise<void>
+  undoPaid: (m: MoneyData, o: Obligation) => Promise<void>
+  deposit: (m: MoneyData, step: SavingsStep, today: string) => Promise<void>
+  undeposit: (step: SavingsStep) => Promise<void>
+  setBalance: (accountId: string, balance: number | null) => Promise<void>
+}
+export const liveActions: BudgetActions = {
+  setBudget: setBudgetAmount, setCat: setLineCategory, setNote: setMonthNote, copyLast: copyLastMonth,
+  markPaid: (m, o, amount) => markPaid(m, o, amount), undoPaid: undoPayment,
+  deposit: saveDeposit, undeposit: undoDeposit, setBalance: setAccountBalance,
+}
+export const BudgetActionsContext = createContext<BudgetActions>(liveActions)
+const useActions = () => useContext(BudgetActionsContext)
 
 // Your Clover Brook budget sheet, on the computer: Budget vs Actual for each category,
 // the pie chart, income vs expenses by month, and every line folded under its category.
@@ -18,7 +39,7 @@ const NAVY = '#22405F'
 const remember = (k: string, v?: string) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v) } catch { /* fine */ } return null }
 
 /** Your budget amounts, moved lines and notes, loaded once and reloaded after a change. */
-export function useBudgetExtras(): [BudgetExtras, () => Promise<void>] {
+export function useBudgetExtras(enabled = true): [BudgetExtras, () => Promise<void>] {
   const [x, setX] = useState<BudgetExtras>(EMPTY_EXTRAS)
   const reload = async () => {
     try {
@@ -29,14 +50,21 @@ export function useBudgetExtras(): [BudgetExtras, () => Promise<void>] {
       setX(snap ? { ...snap.data, ready: false } : got)
     } catch { /* not set up yet */ }
   }
-  useEffect(() => { void reload() }, [])
+  useEffect(() => { if (enabled) void reload() }, [enabled])   // eslint-disable-line react-hooks/exhaustive-deps
   return [x, reload]
 }
 
-interface Props { m: MoneyData; today: string; loaded: boolean; reloadMoney: () => Promise<void>; needHistory?: () => void; offline?: boolean }
+interface Props {
+  m: MoneyData; today: string; loaded: boolean; reloadMoney: () => Promise<void>; needHistory?: () => void; offline?: boolean
+  extras?: BudgetExtras; reloadExtras?: () => Promise<void>   // the tablet app passes its own copy
+  toolbar?: ReactNode                                        // extra buttons in the header (tablet: Add spending)
+}
 
-export default function BudgetView({ m, today, loaded, reloadMoney, needHistory, offline = false }: Props) {
-  const [x, reloadExtras] = useBudgetExtras()
+export default function BudgetView({ m, today, loaded, reloadMoney, needHistory, offline = false, extras, reloadExtras: reloadGiven, toolbar }: Props) {
+  const [own, reloadOwn] = useBudgetExtras(!extras)
+  const x = extras ?? own
+  const reloadExtras = reloadGiven ?? reloadOwn
+  const actions = useActions()
   const [month, setMonth] = useState(today.slice(0, 7))
   const [view, setView] = useState<'month' | 'year'>('month')
   const [error, setError] = useState('')
@@ -81,7 +109,7 @@ export default function BudgetView({ m, today, loaded, reloadMoney, needHistory,
   async function copy() {
     setBusy('copy')
     await run(async () => {
-      const n = await copyLastMonth(x, month)
+      const n = await actions.copyLast(x, month)
       if (!n) throw new Error(`Nothing typed in ${monthName(shiftMonth(month, -1))} to copy. Bills, minimums and auto-pay already fill in by themselves.`)
     })
     setBusy('')
@@ -118,6 +146,7 @@ export default function BudgetView({ m, today, loaded, reloadMoney, needHistory,
         <button type="button" disabled={busy === 'excel'} onClick={() => void download()} className="h-11 px-4 rounded-xl border-0 text-white font-bold cursor-pointer disabled:opacity-60" style={{ background: NAVY }}>
           {busy === 'excel' ? 'Making the file…' : 'Download Excel'}
         </button>
+        {toolbar}
       </header>
 
       {!x.ready && !offline && (
@@ -342,6 +371,7 @@ function BankPanel({ p, m, today, hide }: { p: BudgetMonth['panels'][number]; m:
 }
 
 function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hide: boolean; run: Run }) {
+  const actions = useActions()
   const accts = m.accounts.filter((a) => ['savings', 'vault', 'stash', 'invest'].includes(a.kind)).sort((a, b) => a.sort - b.sort)
   const [editing, setEditing] = useState<string | null>(null)
   const [val, setVal] = useState('')
@@ -366,7 +396,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
                   </button>
                 )}
                 {editing === a.id ? (
-                  <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const n = parseMoney(val); void run(() => setAccountBalance(a.id, n)).then(() => setEditing(null)) }}>
+                  <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const n = parseMoney(val); void run(() => actions.setBalance(a.id, n)).then(() => setEditing(null)) }}>
                     <input autoFocus aria-label={`${a.name} balance`} value={val} onChange={(e) => setVal(e.target.value)} inputMode="decimal" className="w-24 h-8 rounded-lg border border-line bg-surface px-2 text-right tnum" />
                     <button type="submit" className="h-8 px-2 rounded-lg border-0 bg-accent text-accent-ink text-xs font-bold cursor-pointer">Save</button>
                     <button type="button" onClick={() => setEditing(null)} className="h-8 px-1 bg-transparent border-0 text-muted text-xs cursor-pointer">Cancel</button>
@@ -382,7 +412,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
                   {plan.next && !plan.due && <span className="font-bold text-fg">Next {money(plan.next.amount).replace('.00', '')} · {shortDate(plan.next.date)}</span>}
                   {plan.behind > 0 && <span className="font-bold text-warn">{money(plan.behind)} behind</span>}
                   {plan.next && plan.due && (
-                    <button type="button" onClick={() => void run(() => saveDeposit(m, plan.next!, today))}
+                    <button type="button" onClick={() => void run(() => actions.deposit(m, plan.next!, today))}
                       className="h-8 px-3 rounded-lg border-0 bg-pay text-white text-xs font-bold cursor-pointer">Added {money(plan.next.amount).replace('.00', '')} ✓</button>
                   )}
                   {!plan.next && <span className="font-bold text-pay-ink">All {plan.total} done 🎉</span>}
@@ -399,6 +429,7 @@ function SavingsPanel({ m, today, hide, run }: { m: MoneyData; today: string; hi
 }
 
 function MonthNote({ x, month, run }: { x: BudgetExtras; month: string; run: Run }) {
+  const actions = useActions()
   const saved = x.notes.find((n) => n.month === month)?.note ?? ''
   const [v, setV] = useState(saved)
   useEffect(() => setV(saved), [saved, month])
@@ -406,7 +437,7 @@ function MonthNote({ x, month, run }: { x: BudgetExtras; month: string; run: Run
   return (
     <label className="rounded-2xl border border-line bg-surface px-4 py-3 flex items-center gap-3">
       <span className="text-xs font-bold tracking-widest uppercase text-muted shrink-0">Notes for {monthName(month)}</span>
-      <input value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== saved) void run(() => setMonthNote(month, v)) }}
+      <input value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== saved) void run(() => actions.setNote(month, v)) }}
         placeholder="Extra income, what's different this month…" className="flex-1 min-w-0 h-9 rounded-lg border border-line bg-surface-2 px-3 text-fg" />
     </label>
   )
@@ -419,6 +450,7 @@ function MonthNote({ x, month, run }: { x: BudgetExtras; month: string; run: Run
 function CategoryBlock({ c, i, b, m, x, today, open, toggle, run }: {
   c: BudgetCatRow; i: number; b: BudgetMonth; m: MoneyData; x: BudgetExtras; today: string; open: boolean; toggle: () => void; run: Run
 }) {
+  const actions = useActions()
   const over = c.actual - c.budget > 0.005
   const [adding, setAdding] = useState('')
   const present = new Set(b.cats.flatMap((y) => y.lines.map((l) => l.key)))
@@ -443,7 +475,7 @@ function CategoryBlock({ c, i, b, m, x, today, open, toggle, run }: {
                 <option value="">+ Budget for…</option>
                 {canAdd.map((k) => <option key={k} value={k}>{lineNameFromKey(m, k)}</option>)}
               </select>
-              {adding && <AmountForm initial="" label={lineNameFromKey(m, adding)} onSave={(n) => run(() => setBudgetAmount(b.month, adding, n ?? 0)).then(() => setAdding(''))} onCancel={() => setAdding('')} />}
+              {adding && <AmountForm initial="" label={lineNameFromKey(m, adding)} onSave={(n) => run(() => actions.setBudget(b.month, adding, n ?? 0)).then(() => setAdding(''))} onCancel={() => setAdding('')} />}
             </div>
           )}
         </div>
@@ -453,6 +485,7 @@ function CategoryBlock({ c, i, b, m, x, today, open, toggle, run }: {
 }
 
 function LineRow({ l, b, m, today, run }: { l: BudgetLine; b: BudgetMonth; m: MoneyData; today: string; run: Run }) {
+  const actions = useActions()
   const [edit, setEdit] = useState(false)
   const chip = bankColor(l.from)
   const over = l.actual - l.budget > 0.005 && l.budget > 0
@@ -466,13 +499,13 @@ function LineRow({ l, b, m, today, run }: { l: BudgetLine; b: BudgetMonth; m: Mo
     const next = steps.find((s) => !s.deposit)
     const last = [...steps].reverse().find((s) => s.deposit)
     box = <input type="checkbox" checked={!next} aria-label={`Saved: ${l.name}`} className="size-[18px] cursor-pointer"
-      onChange={() => void run(() => (next ? saveDeposit(m, next, today) : undoDeposit(last!)))} />
+      onChange={() => void run(() => (next ? actions.deposit(m, next, today) : actions.undeposit(last!)))} />
   } else if (l.dueCount > 0) {
     const nextO = l.open[0]
     const lastPaid = l.paid[l.paid.length - 1]
     box = <input type="checkbox" checked={l.open.length === 0} aria-label={`Paid: ${l.name}`} className="size-[18px] cursor-pointer" disabled={Boolean(nextO && !nextO.amount)}
       title={nextO && !nextO.amount ? 'Add the amount on the Bills tab first' : undefined}
-      onChange={() => void run(() => (nextO ? markPaid(m, nextO, nextO.amount ?? 0) : undoPayment(m, lastPaid)))} />
+      onChange={() => void run(() => (nextO ? actions.markPaid(m, nextO, nextO.amount ?? 0) : actions.undoPaid(m, lastPaid)))} />
   }
 
   const notes: string[] = []
@@ -506,13 +539,14 @@ function LineRow({ l, b, m, today, run }: { l: BudgetLine; b: BudgetMonth; m: Mo
 }
 
 function LineEditor({ l, b, run, done }: { l: BudgetLine; b: BudgetMonth; run: Run; done: () => void }) {
+  const actions = useActions()
   const [cat, setCat] = useState<BudgetCat>(l.cat)
   return (
     <div className="px-4 pb-3 pl-[60px] flex flex-wrap items-center gap-3 text-sm bg-surface-2 pt-2">
       <AmountForm initial={String(l.budget)} label={l.name}
         onSave={(n) => run(async () => {
-          if (l.typedBudget || Math.abs((n ?? 0) - l.budget) > 0.004) await setBudgetAmount(b.month, l.key, n)   // only a real change becomes this month's budget
-          if (cat !== l.cat) await setLineCategory(l.key, cat)
+          if (l.typedBudget || Math.abs((n ?? 0) - l.budget) > 0.004) await actions.setBudget(b.month, l.key, n)   // only a real change becomes this month's budget
+          if (cat !== l.cat) await actions.setCat(l.key, cat)
         }).then(done)} onCancel={done} />
       <label className="flex items-center gap-1.5">
         <span className="text-muted">Category</span>
@@ -521,12 +555,12 @@ function LineEditor({ l, b, run, done }: { l: BudgetLine; b: BudgetMonth; run: R
         </select>
       </label>
       {l.typedBudget && l.usualBudget > 0 && (
-        <button type="button" onClick={() => void run(() => setBudgetAmount(b.month, l.key, null)).then(done)} className="bg-transparent border-0 p-0 text-accent font-bold cursor-pointer">
+        <button type="button" onClick={() => void run(() => actions.setBudget(b.month, l.key, null)).then(done)} className="bg-transparent border-0 p-0 text-accent font-bold cursor-pointer">
           Use the usual {money(l.usualBudget)}
         </button>
       )}
       {l.movedCat && (
-        <button type="button" onClick={() => void run(() => setLineCategory(l.key, null)).then(done)} className="bg-transparent border-0 p-0 text-accent font-bold cursor-pointer">Put back in its usual category</button>
+        <button type="button" onClick={() => void run(() => actions.setCat(l.key, null)).then(done)} className="bg-transparent border-0 p-0 text-accent font-bold cursor-pointer">Put back in its usual category</button>
       )}
       <span className="text-xs text-muted basis-full">The budget is for {monthName(b.month)} (Copy last month's budget carries it forward). A new category applies to every month.</span>
     </div>
